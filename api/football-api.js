@@ -13,6 +13,9 @@ const { all, run, get, getSetting, setSetting } = require('../database/data');
 const { scoreMatch } = require('../backend/scoring');
 
 const API_URL = 'https://v3.football.api-sports.io/fixtures?league=1&season=2026';
+// Fonte gratuita de placar (API pública da ESPN): sem chave e sem cota.
+// Cobre os jogos do dia — perfeita para o placar ao vivo.
+const ESPN_URL = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
 const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 15 * 60_000); // 15 min (sem jogo rolando)
 // Durante um jogo a sync acelera para o placar ao vivo não atrasar.
 // Atenção à cota grátis da API-Football (100 req/dia): 3 min cobre bem 1-3 jogos/dia.
@@ -57,8 +60,65 @@ function findLocalMatch(fx, locals) {
   return ph.length === 1 ? ph[0] : null;
 }
 
-/** Busca os resultados na API e atualiza o banco. Devolve true se algo mudou. */
+/** Sincroniza pelas duas fontes. Devolve true se algo mudou. */
 async function syncResults() {
+  let changed = await syncFromApiFootball();
+  if (await syncFromESPN()) changed = true;
+  return changed;
+}
+
+/** Placar ao vivo via ESPN (grátis). Atualiza só jogos em andamento/encerrados. */
+async function syncFromESPN() {
+  let data;
+  try {
+    const res = await fetch(ESPN_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (err) {
+    console.error('[ESPN] Falha ao buscar:', err.message);
+    return false;
+  }
+
+  const locals = await all('SELECT * FROM matches');
+  let changed = false;
+  for (const ev of data.events || []) {
+    const comp = ev.competitions?.[0];
+    const hc = comp?.competitors?.find((c) => c.homeAway === 'home');
+    const ac = comp?.competitors?.find((c) => c.homeAway === 'away');
+    if (!hc?.team?.name || !ac?.team?.name) continue;
+
+    // monta no formato de fixture da API-Football para reusar o matcher
+    // (id -1 evita casar com api_fixture_id nulo de outros jogos)
+    const local = findLocalMatch({
+      fixture: { id: -1, date: ev.date },
+      teams: { home: { name: hc.team.name }, away: { name: ac.team.name } },
+    }, locals);
+    if (!local) continue;
+
+    const state = ev.status?.type?.state; // pre | in | post
+    const status = state === 'post' ? 'finished' : state === 'in' ? 'live' : 'scheduled';
+    if (status === 'scheduled') continue; // antes da bola rolar não há o que atualizar
+    const hs = hc.score === '' || hc.score == null ? null : Number(hc.score);
+    const as = ac.score === '' || ac.score == null ? null : Number(ac.score);
+    if (local.status === status && local.home_score === hs && local.away_score === as) continue;
+
+    const isPh = local.home_team === 'A definir' || /^[123][A-L]+$/.test(local.home_team);
+    await run(
+      `UPDATE matches SET home_score=$1, away_score=$2, status=$3,
+         home_team = CASE WHEN $6 THEN $4 ELSE home_team END,
+         away_team = CASE WHEN $6 THEN $5 ELSE away_team END
+       WHERE id=$7`,
+      [hs, as, status, hc.team.name, ac.team.name, isPh, local.id]);
+    changed = true;
+    if (status === 'finished' && hs !== null && as !== null) await scoreMatch(local.id);
+  }
+
+  if (changed) console.log('[ESPN] Placar atualizado em', new Date().toISOString());
+  return changed;
+}
+
+/** Busca os resultados na API-Football e atualiza o banco. Devolve true se algo mudou. */
+async function syncFromApiFootball() {
   const key = await apiKey();
   if (!key) return false;
 
@@ -106,7 +166,7 @@ async function syncResults() {
  *  intervalo cai para LIVE_SYNC_INTERVAL_MS e o placar atualiza rápido. */
 async function syncIfStale() {
   try {
-    if (!(await apiKey())) return false;
+    // sem chave da API-Football ainda funciona: o placar vem da ESPN (grátis)
     const last = Number(await getSetting('last_sync', '0'));
     const inGameWindow = await get(`
       SELECT 1 AS x FROM matches
