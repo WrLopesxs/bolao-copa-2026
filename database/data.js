@@ -125,8 +125,17 @@ CREATE TABLE IF NOT EXISTS push_subs (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- mensagens do chat do bolão
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text       TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_pred_match ON predictions(match_id);
 CREATE INDEX IF NOT EXISTS idx_pred_user  ON predictions(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_id    ON chat_messages(id DESC);
 `;
 
 // Garante schema + jogos carregados. Memoizado (roda uma vez por processo).

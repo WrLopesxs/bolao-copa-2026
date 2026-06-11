@@ -961,6 +961,96 @@ function editMatchModal(id) {
   });
 }
 
+// ---------- CHAT ----------
+let chatPoll = null;
+let chatLastId = 0;
+const CHAT_EMOJIS = ['⚽', '🥅', '🏆', '🔥', '😂', '😅', '😍', '😎', '🤙', '👏', '👍', '👎', '🙏', '💪', '🎉', '😭', '😡', '🐐', '🍀', '🤝'];
+
+function fmtChatTime(iso) {
+  const d = new Date(iso);
+  const hoje = d.toDateString() === new Date().toDateString();
+  return hoje
+    ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function chatMsgHTML(m) {
+  const mine = m.user_id === state.user.id;
+  return `
+    <div class="chat-msg ${mine ? 'mine' : ''}">
+      ${mine ? '' : avatar(m)}
+      <div class="bubble">
+        ${mine ? '' : `<div class="who">${esc(m.name)}</div>`}
+        <div class="txt">${esc(m.text)}</div>
+        <div class="when">${fmtChatTime(m.created_at)}</div>
+      </div>
+    </div>`;
+}
+
+async function viewChat() {
+  app.innerHTML = `
+    <h2 class="page-title">Chat do bolão</h2>
+    <p class="page-sub">Converse com os participantes — todos veem as mensagens</p>
+    <div class="card chat-card">
+      <div class="chat-list" id="chatList"><p class="muted chat-empty">Carregando…</p></div>
+      <div class="chat-emojis" id="chatEmojis">${CHAT_EMOJIS.map(e => `<button type="button">${e}</button>`).join('')}</div>
+      <form class="chat-form" id="chatForm">
+        <input id="chatInput" maxlength="500" placeholder="Escreva uma mensagem…" autocomplete="off">
+        <button class="btn small" type="submit">Enviar</button>
+      </form>
+    </div>`;
+
+  const list = $('#chatList'), input = $('#chatInput');
+  chatLastId = 0;
+  let firstLoad = true;
+
+  const load = async () => {
+    try {
+      const d = await api(`/chat${chatLastId ? `?after=${chatLastId}` : ''}`);
+      if (firstLoad) list.innerHTML = '';
+      if (d.messages.length) {
+        list.querySelector('.chat-empty')?.remove();
+        // só rola para o fim se o usuário já estiver perto dele (não atrapalha quem lê o histórico)
+        const nearBottom = firstLoad || list.scrollHeight - list.scrollTop - list.clientHeight < 90;
+        list.insertAdjacentHTML('beforeend', d.messages.map(chatMsgHTML).join(''));
+        chatLastId = d.messages[d.messages.length - 1].id;
+        if (nearBottom) list.scrollTop = list.scrollHeight;
+      } else if (firstLoad) {
+        list.innerHTML = '<p class="muted chat-empty">Nenhuma mensagem ainda. Comece a conversa! ⚽</p>';
+      }
+      firstLoad = false;
+    } catch {} // falha de rede no polling: tenta de novo no próximo ciclo
+  };
+  await load();
+
+  // novas mensagens a cada 5s enquanto a aba Chat estiver aberta
+  if (chatPoll) clearInterval(chatPoll);
+  chatPoll = setInterval(() => {
+    const r = (location.hash.replace('#/', '') || 'dashboard').split('/')[0];
+    if (r !== 'chat') { clearInterval(chatPoll); chatPoll = null; return; }
+    load();
+  }, 5000);
+
+  $('#chatEmojis').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    input.value += b.textContent;
+    input.focus();
+  });
+
+  $('#chatForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    try {
+      await api('/chat', { method: 'POST', body: { text } });
+      await load();
+    } catch (err) { toast(esc(err.message), 'err'); input.value = text; }
+    input.focus();
+  });
+}
+
 // ------------------------------------------------------------ roteador
 const routes = {
   login: () => viewAuth('login'),
@@ -969,6 +1059,7 @@ const routes = {
   dashboard: viewDashboard,
   jogos: viewJogos,
   ranking: viewRanking,
+  chat: viewChat,
   perfil: viewPerfil,
   admin: () => viewAdmin('jogos'),
 };

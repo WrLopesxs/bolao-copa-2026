@@ -131,6 +131,32 @@ router.get('/online', requireAuth, h(async (req, res) => {
   res.json({ online });
 }));
 
+// ================================================================ CHAT
+// Lista as últimas mensagens; com ?after=ID retorna só as mais novas (polling incremental).
+router.get('/chat', requireAuth, h(async (req, res) => {
+  const after = Number(req.query.after) || 0;
+  const messages = after > 0
+    ? await all(`
+        SELECT c.id, c.text, c.created_at, u.id AS user_id, u.name, u.photo
+          FROM chat_messages c JOIN users u ON u.id = c.user_id
+         WHERE c.id > $1 ORDER BY c.id ASC LIMIT 200`, [after])
+    : (await all(`
+        SELECT c.id, c.text, c.created_at, u.id AS user_id, u.name, u.photo
+          FROM chat_messages c JOIN users u ON u.id = c.user_id
+         ORDER BY c.id DESC LIMIT 50`)).reverse();
+  res.json({ messages });
+}));
+
+router.post('/chat', requireAuth, h(async (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Mensagem vazia.' });
+  if (text.length > 500) return res.status(400).json({ error: 'Mensagem muito longa (máx. 500 caracteres).' });
+  const row = await get(
+    'INSERT INTO chat_messages (user_id, text) VALUES ($1, $2) RETURNING id',
+    [req.user.id, text]);
+  res.json({ ok: true, id: row.id });
+}));
+
 // ============================================================== JOGOS
 router.get('/matches', requireAuth, h(async (req, res) => {
   const matches = await all('SELECT * FROM matches ORDER BY date_utc ASC, id ASC');
