@@ -448,6 +448,31 @@ function updateCountdowns() {
   });
 }
 
+// Jogo rolando agora (ao vivo, ou agendado que passou do horário há menos de 3h)
+function isOngoing(m, now = Date.now()) {
+  if (m.status === 'live') return true;
+  const start = new Date(m.date_utc).getTime();
+  return m.status === 'scheduled' && now >= start && now < start + 3 * 3600_000;
+}
+
+// Busca o placar mais novo e atualiza os cards na tela, sem re-renderizar
+// (não apaga palpites sendo digitados). Re-renderiza só se um status mudou.
+async function refreshLiveScores() {
+  try {
+    const { matches } = await api('/matches');
+    const statusChanged = matches.some(m =>
+      state.matches.find(x => x.id === m.id)?.status !== m.status);
+    state.matches = matches;
+    matches.forEach(m => {
+      if (m.status === 'scheduled' && !isOngoing(m)) return;
+      const el = document.querySelector(`.match-card[data-id="${m.id}"] .score-final`);
+      if (el) el.textContent = `${m.home_score ?? '–'} x ${m.away_score ?? '–'}`;
+    });
+    const typing = document.activeElement && document.activeElement.matches('.score-box input');
+    if (statusChanged && !typing) viewJogos();
+  } catch {} // rede falhou: tenta no próximo ciclo
+}
+
 async function viewJogos() {
   const { matches } = await api('/matches');
   state.matches = matches;
@@ -602,6 +627,7 @@ async function viewJogos() {
     const r = (location.hash.replace('#/', '') || 'dashboard').split('/')[0];
     if (r !== 'jogos') { clearInterval(lockWatch); lockWatch = null; return; }
     updateCountdowns();
+    if (state.matches.some(m => isOngoing(m))) refreshLiveScores(); // placar ao vivo
     const justLocked = state.matches.some(m => !m.locked && isLockedNow(m));
     const typing = document.activeElement && document.activeElement.matches('.score-box input');
     if (justLocked && !typing) viewJogos();
@@ -750,7 +776,7 @@ async function viewAdmin(tab = 'jogos') {
   let inner = '';
 
   if (tab === 'usuarios') {
-    const { users } = await api('/admin/users');
+    const [{ users }, { matches }] = await Promise.all([api('/admin/users'), api('/matches')]);
     inner = `
       <div class="card">
         <h3>Adicionar usuário</h3>
@@ -760,6 +786,28 @@ async function viewAdmin(tab = 'jogos') {
           <div class="field"><label>Setor</label><input name="sector"></div>
           <div class="field"><label>Senha</label><input name="password" required></div>
           <button class="btn small" type="submit">Adicionar</button>
+        </form>
+      </div><br>
+      <div class="card">
+        <h3>Lançar palpite por usuário</h3>
+        <p class="muted" style="margin-bottom:10px">
+          Para quem entrou depois do bloqueio: escolha o participante, o jogo (mesmo travado ou encerrado)
+          e o placar. Jogos já encerrados pontuam na hora.
+        </p>
+        <form id="retroPred" class="inline-form">
+          <div class="field"><label>Participante</label>
+            <select name="user_id" required>
+              <option value="">Selecione…</option>
+              ${users.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}
+            </select></div>
+          <div class="field"><label>Jogo</label>
+            <select name="match_id" required>
+              <option value="">Selecione…</option>
+              ${matches.map(m => `<option value="${m.id}">#${m.id} ${esc(m.home_pt)} x ${esc(m.away_pt)} · ${fmtDate(m.date_utc)}${m.status === 'finished' ? ' ✅' : m.locked ? ' 🔒' : ''}</option>`).join('')}
+            </select></div>
+          <div class="field"><label>Casa</label><input name="home" type="number" min="0" max="99" required style="width:80px"></div>
+          <div class="field"><label>Fora</label><input name="away" type="number" min="0" max="99" required style="width:80px"></div>
+          <button class="btn small" type="submit">Salvar palpite</button>
         </form>
       </div><br>
       <div class="card"><div class="table-wrap"><table class="rank">
@@ -868,6 +916,16 @@ async function viewAdmin(tab = 'jogos') {
       viewAdmin('usuarios');
     } catch (err) { toast(esc(err.message), 'err'); }
   }));
+  $('#retroPred')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      await api('/admin/predictions', { method: 'POST', body: fd });
+      toast('Palpite lançado!');
+      e.target.querySelector('[name=home]').value = '';
+      e.target.querySelector('[name=away]').value = '';
+    } catch (err) { toast(esc(err.message), 'err'); }
+  });
 
   // --- ações da aba jogos
   app.querySelectorAll('[data-edit]').forEach(tr =>

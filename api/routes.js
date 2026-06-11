@@ -159,6 +159,7 @@ router.post('/chat', requireAuth, h(async (req, res) => {
 
 // ============================================================== JOGOS
 router.get('/matches', requireAuth, h(async (req, res) => {
+  syncIfStale(); // com jogo rolando, quem está na tela de palpites também puxa o placar
   const matches = await all('SELECT * FROM matches ORDER BY date_utc ASC, id ASC');
   const preds = await all('SELECT * FROM predictions WHERE user_id = $1', [req.user.id]);
   const byMatch = new Map(preds.map((p) => [p.match_id, p]));
@@ -277,6 +278,27 @@ router.delete('/admin/users/:id', requireAdmin, h(async (req, res) => {
 
 router.put('/admin/users/:id', requireAdmin, h(async (req, res) => {
   await run('UPDATE users SET is_admin = $1 WHERE id = $2', [req.body?.is_admin ? 1 : 0, Number(req.params.id)]);
+  res.json({ ok: true });
+}));
+
+// Palpite retroativo: admin lança para quem entrou depois do jogo travar.
+router.post('/admin/predictions', requireAdmin, h(async (req, res) => {
+  const userId = Number(req.body?.user_id), matchId = Number(req.body?.match_id);
+  if (!Number.isInteger(userId) || userId <= 0 || !Number.isInteger(matchId) || matchId <= 0)
+    return res.status(400).json({ error: 'Selecione o participante e o jogo.' });
+  const home = validScore(req.body?.home), away = validScore(req.body?.away);
+  if (home === null || away === null) return res.status(400).json({ error: 'Placar inválido. Use números de 0 a 99.' });
+  if (!await get('SELECT id FROM users WHERE id = $1', [userId])) return res.status(404).json({ error: 'Usuário não encontrado.' });
+  const match = await get('SELECT * FROM matches WHERE id = $1', [matchId]);
+  if (!match) return res.status(404).json({ error: 'Jogo não encontrado.' });
+  await run(`
+    INSERT INTO predictions (user_id, match_id, home_pred, away_pred, updated_at)
+    VALUES ($1,$2,$3,$4, now())
+    ON CONFLICT (user_id, match_id)
+    DO UPDATE SET home_pred=excluded.home_pred, away_pred=excluded.away_pred, updated_at=now()`,
+    [userId, matchId, home, away]);
+  // jogo já encerrado: pontua na hora
+  if (match.status === 'finished') await scoreMatch(matchId);
   res.json({ ok: true });
 }));
 

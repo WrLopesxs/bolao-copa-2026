@@ -13,7 +13,10 @@ const { all, run, get, getSetting, setSetting } = require('../database/data');
 const { scoreMatch } = require('../backend/scoring');
 
 const API_URL = 'https://v3.football.api-sports.io/fixtures?league=1&season=2026';
-const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 15 * 60_000); // 15 min
+const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 15 * 60_000); // 15 min (sem jogo rolando)
+// Durante um jogo a sync acelera para o placar ao vivo não atrasar.
+// Atenção à cota grátis da API-Football (100 req/dia): 3 min cobre bem 1-3 jogos/dia.
+const LIVE_SYNC_INTERVAL_MS = Number(process.env.LIVE_SYNC_INTERVAL_MS || 3 * 60_000); // 3 min
 
 const ALIASES = {
   'south korea': 'korea republic', 'iran': 'ir iran', 'turkey': 'turkiye',
@@ -98,12 +101,20 @@ async function syncResults() {
   return changed;
 }
 
-/** Sincroniza só se a última foi há mais de SYNC_INTERVAL (evita estouro de cota). */
+/** Sincroniza só se a última foi há tempo suficiente (evita estouro de cota).
+ *  Com jogo rolando (ao vivo, ou agendado que já passou do horário), o
+ *  intervalo cai para LIVE_SYNC_INTERVAL_MS e o placar atualiza rápido. */
 async function syncIfStale() {
   try {
     if (!(await apiKey())) return false;
     const last = Number(await getSetting('last_sync', '0'));
-    if (Date.now() - last < SYNC_INTERVAL_MS) return false;
+    const inGameWindow = await get(`
+      SELECT 1 AS x FROM matches
+       WHERE status = 'live'
+          OR (status = 'scheduled' AND date_utc <= now() AND date_utc > now() - interval '3 hours')
+       LIMIT 1`);
+    const interval = inGameWindow ? LIVE_SYNC_INTERVAL_MS : SYNC_INTERVAL_MS;
+    if (Date.now() - last < interval) return false;
     await setSetting('last_sync', Date.now()); // marca antes para evitar disparos simultâneos
     return await syncResults();
   } catch (e) {
