@@ -476,6 +476,9 @@ async function viewJogos() {
     // Palpite já confirmado fica bloqueado até o usuário clicar em "Editar"
     const confirmed = open && pred && !editingMatches.has(m.id);
     const editable = open && !confirmed;
+    // Jogo que já começou (mesmo que o sync ainda não tenha marcado "ao vivo")
+    const started = m.status !== 'scheduled' || now >= new Date(m.date_utc).getTime();
+    const emAndamento = m.status === 'live' || (m.status === 'scheduled' && started && locked);
     return `
     <div class="match-card" data-id="${m.id}">
       <div class="match-meta">
@@ -483,6 +486,7 @@ async function viewJogos() {
         <span class="meta-badges">
         ${m.status === 'live' ? '<span class="badge live">AO VIVO</span>'
           : m.status === 'finished' ? '<span class="badge fin">Encerrado</span>'
+          : emAndamento ? '<span class="badge live">EM ANDAMENTO</span>'
           : locked ? '<span class="badge fin">Bloqueado</span>'
           : `${m.lock_mode !== 'open'
               ? `<span class="badge timer" data-lock-at="${new Date(m.date_utc).getTime() - LOCK_BEFORE_MS}"></span>` : ''}<span class="badge sched">Aberto</span>`}
@@ -491,7 +495,7 @@ async function viewJogos() {
       </div>
       <div class="match-row">
         <div class="team home"><span class="name">${esc(m.home_pt)}</span>${flag(m.home_flag, m.home_pt)}</div>
-        ${m.status !== 'scheduled'
+        ${started
           ? `<div class="score-final">${m.home_score ?? '–'} x ${m.away_score ?? '–'}</div>`
           : editable
             ? `<div class="score-box">
@@ -508,7 +512,8 @@ async function viewJogos() {
               : `<div class="score-final">${pred ? pred.home + ' x ' + pred.away : '–'}</div>`}
         <div class="team">${flag(m.away_flag, m.away_pt)}<span class="name">${esc(m.away_pt)}</span></div>
       </div>
-      ${m.status !== 'scheduled' && pred ? `<div class="my-pred">Meu palpite: <b>${pred.home} x ${pred.away}</b></div>` : ''}
+      ${started && pred ? `<div class="my-pred">Meu palpite: <b>${pred.home} x ${pred.away}</b></div>` : ''}
+      ${emAndamento ? `<div class="watch-live"><a href="https://www.youtube.com/@CazeTV/live" target="_blank" rel="noopener">📺 Assistir na CazéTV</a></div>` : ''}
       <div class="match-actions">
         ${editable ? `<button class="btn small" data-save="${m.id}">Salvar palpite</button>` : ''}
         ${confirmed ? `<button class="btn small ghost" data-edit="${m.id}">Editar</button>` : ''}
