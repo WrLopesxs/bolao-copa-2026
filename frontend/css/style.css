@@ -67,11 +67,14 @@ input:focus, select:focus {
 svg.ic { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 
 /* ------------------------------------------------ barra superior */
+/* fixed (e não sticky) porque o overflow-x:hidden do body quebra position:sticky */
 .topbar {
-  position: sticky; top: 0; z-index: 50;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
   background: var(--card);
   border-bottom: 1px solid var(--border);
 }
+body { padding-top: 58px; } /* compensa a topbar fixa (fora do fluxo) */
+body:has(#topbar[hidden]) { padding-top: 0; } /* tela de login não tem topbar */
 .topbar-inner {
   max-width: 1060px; margin: 0 auto; padding: 10px 16px;
   display: flex; align-items: center; gap: 16px;
@@ -117,6 +120,9 @@ svg.ic { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-wid
   .nav a.active { background: transparent; }
   .nav svg.ic { width: 21px; height: 21px; }
   body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+  /* no celular o botão "salvar todos" encolhe para não brigar com o título */
+  .save-all-bar { top: 64px; right: 12px; }
+  .save-all-bar .btn { padding: 8px 14px; font-size: .8rem; }
 
   /* layout mais compacto no celular */
   main { padding: 16px 13px 40px; }
@@ -313,9 +319,17 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px 16px 48px; }
   width: 44px; height: 42px; text-align: center; font-size: 1.1rem; font-weight: 700;
   padding: 0; border-radius: 9px;
 }
+.score-box input:disabled { opacity: .65; cursor: not-allowed; }
 .score-box .x { color: var(--muted); font-weight: 600; font-size: .8rem; }
 .score-final { font-size: 1.18rem; font-weight: 800; letter-spacing: -.02em; min-width: 64px; text-align: center; white-space: nowrap; flex-shrink: 0; }
 .match-actions { display: flex; justify-content: center; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
+/* fixed (e não sticky) porque o overflow-x:hidden do body quebra position:sticky.
+   Fica no canto superior direito, logo abaixo da topbar, alinhado à coluna de conteúdo. */
+.save-all-bar {
+  position: fixed; top: 70px; z-index: 49;
+  right: max(12px, calc((100vw - 1060px) / 2 - 30px));
+}
+.save-all-bar .btn { width: auto; padding: 10px 20px; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); }
 .my-pred { text-align: center; font-size: .78rem; color: var(--muted); margin-top: 7px; }
 
 /* ------------------------------------------------ ranking */

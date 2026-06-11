@@ -409,6 +409,18 @@ async function viewDashboard() {
 }
 
 // ---------- JOGOS & PALPITES ----------
+// Jogos cujo palpite já confirmado o usuário reabriu para editar.
+const editingMatches = new Set();
+// Mesma regra do backend: trava 1h antes do jogo (respeitando lock_mode).
+const LOCK_BEFORE_MS = 60 * 60 * 1000;
+function isLockedNow(m, now = Date.now()) {
+  if (m.locked) return true;
+  if (m.status !== 'scheduled') return true;
+  if (m.lock_mode === 'open') return false;
+  return now >= new Date(m.date_utc).getTime() - LOCK_BEFORE_MS;
+}
+let lockWatch = null;
+
 async function viewJogos() {
   const { matches } = await api('/matches');
   state.matches = matches;
@@ -432,14 +444,18 @@ async function viewJogos() {
 
   const matchCard = (m) => {
     const pred = m.my_prediction;
-    const editable = !m.locked && m.status === 'scheduled';
+    const locked = isLockedNow(m, now);
+    const open = !locked && m.status === 'scheduled';
+    // Palpite já confirmado fica bloqueado até o usuário clicar em "Editar"
+    const confirmed = open && pred && !editingMatches.has(m.id);
+    const editable = open && !confirmed;
     return `
     <div class="match-card" data-id="${m.id}">
       <div class="match-meta">
         <span>${esc(STAGES[m.stage])}${m.group_name ? ' · Grupo ' + m.group_name : ''} · ${fmtDate(m.date_utc)} · ${esc(m.location)}</span>
         ${m.status === 'live' ? '<span class="badge live">AO VIVO</span>'
           : m.status === 'finished' ? '<span class="badge fin">Encerrado</span>'
-          : m.locked ? '<span class="badge fin">Bloqueado</span>' : '<span class="badge sched">Aberto</span>'}
+          : locked ? '<span class="badge fin">Bloqueado</span>' : '<span class="badge sched">Aberto</span>'}
         ${pred?.points != null ? `<span class="badge pts">+${pred.points} pts</span>` : ''}
       </div>
       <div class="match-row">
@@ -452,23 +468,36 @@ async function viewJogos() {
                  <span class="x">x</span>
                  <input type="number" min="0" max="99" inputmode="numeric" data-a value="${pred ? pred.away : ''}" placeholder="–">
                </div>`
-            : `<div class="score-final">${pred ? pred.home + ' x ' + pred.away : '–'}</div>`}
+            : confirmed
+              ? `<div class="score-box">
+                   <input type="number" data-h value="${pred.home}" disabled>
+                   <span class="x">x</span>
+                   <input type="number" data-a value="${pred.away}" disabled>
+                 </div>`
+              : `<div class="score-final">${pred ? pred.home + ' x ' + pred.away : '–'}</div>`}
         <div class="team">${flag(m.away_flag, m.away_pt)}<span class="name">${esc(m.away_pt)}</span></div>
       </div>
       ${m.status !== 'scheduled' && pred ? `<div class="my-pred">Meu palpite: <b>${pred.home} x ${pred.away}</b></div>` : ''}
       <div class="match-actions">
         ${editable ? `<button class="btn small" data-save="${m.id}">Salvar palpite</button>` : ''}
-        ${m.locked ? `<button class="btn small ghost" data-compare="${m.id}">Ver palpites</button>` : ''}
+        ${confirmed ? `<button class="btn small ghost" data-edit="${m.id}">Editar</button>` : ''}
+        ${locked ? `<button class="btn small ghost" data-compare="${m.id}">Ver palpites</button>` : ''}
       </div>
     </div>`;
   };
+
+  // Quantos jogos do filtro atual estão com os placares liberados para digitar
+  const editableCount = list.filter(m =>
+    !isLockedNow(m, now) && m.status === 'scheduled' &&
+    (!m.my_prediction || editingMatches.has(m.id))).length;
 
   app.innerHTML = `
     <h2 class="page-title">Jogos e palpites</h2>
     <p class="page-sub">Os palpites travam automaticamente 1 hora antes de cada jogo</p>
     <div class="filters">${chips.map(([k, v]) =>
       `<button class="chip ${f === k ? 'active' : ''}" data-f="${k}">${v}</button>`).join('')}</div>
-    <div class="match-list">${list.map(matchCard).join('') || '<p class="muted">Nenhum jogo neste filtro.</p>'}</div>`;
+    <div class="match-list">${list.map(matchCard).join('') || '<p class="muted">Nenhum jogo neste filtro.</p>'}</div>
+    ${editableCount > 1 ? `<div class="save-all-bar"><button class="btn" id="save-all">Salvar todos os palpites</button></div>` : ''}`;
 
   app.querySelectorAll('[data-f]').forEach(b =>
     b.addEventListener('click', () => { state.filter = b.dataset.f; viewJogos(); }));
@@ -481,14 +510,63 @@ async function viewJogos() {
     if (home === '' || away === '') return toast('Preencha os dois placares.', 'err');
     b.disabled = true;
     try {
-      await api('/predictions', { method: 'POST', body: { match_id: Number(b.dataset.save), home, away } });
+      const id = Number(b.dataset.save);
+      await api('/predictions', { method: 'POST', body: { match_id: id, home, away } });
+      editingMatches.delete(id);
       toast('Palpite salvo!');
+      viewJogos(); // re-renderiza: o palpite confirmado aparece bloqueado com botão "Editar"
+      return;
     } catch (err) { toast(esc(err.message), 'err'); }
     b.disabled = false;
   }));
+
+  // Salva de uma vez todos os palpites preenchidos na tela
+  const saveAllBtn = app.querySelector('#save-all');
+  saveAllBtn?.addEventListener('click', async () => {
+    const toSave = [];
+    app.querySelectorAll('.match-card').forEach(card => {
+      if (!card.querySelector('[data-save]')) return; // só cards em edição
+      const home = card.querySelector('[data-h]').value;
+      const away = card.querySelector('[data-a]').value;
+      if (home !== '' && away !== '') toSave.push({ id: Number(card.dataset.id), home, away });
+    });
+    if (!toSave.length) return toast('Preencha os placares dos jogos que quer salvar.', 'err');
+    saveAllBtn.disabled = true;
+    saveAllBtn.textContent = 'Salvando…';
+    let ok = 0; const errors = [];
+    for (const p of toSave) {
+      try {
+        await api('/predictions', { method: 'POST', body: { match_id: p.id, home: p.home, away: p.away } });
+        editingMatches.delete(p.id);
+        ok++;
+      } catch (err) { errors.push(err.message); }
+    }
+    if (errors.length) toast(`${ok} palpite(s) salvos, ${errors.length} com erro: ${esc(errors[0])}`, 'err');
+    else toast(`${ok} palpites salvos!`);
+    viewJogos();
+  });
+
+  // Reabre o palpite confirmado para edição
+  app.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    editingMatches.add(Number(b.dataset.edit));
+    viewJogos();
+  }));
+
   // Evita que clicar nos inputs abra a comparação
   app.querySelectorAll('.score-box input').forEach(i => i.addEventListener('click', e => e.stopPropagation()));
   bindCompare();
+
+  // Quando o horário de bloqueio chega, re-renderiza para o botão "Editar" sumir
+  // sem precisar recarregar a página (não roda se o usuário estiver digitando um placar).
+  if (lockWatch) clearInterval(lockWatch);
+  lockWatch = setInterval(() => {
+    const r = (location.hash.replace('#/', '') || 'dashboard').split('/')[0];
+    if (r !== 'jogos') { clearInterval(lockWatch); lockWatch = null; return; }
+    const justLocked = state.matches.some(m => !m.locked && isLockedNow(m));
+    const typing = document.activeElement && document.activeElement.matches('.score-box input');
+    if (justLocked && !typing) viewJogos();
+  }, 30000);
 }
 
 // ---------- COMPARAÇÃO DE PALPITES ----------
