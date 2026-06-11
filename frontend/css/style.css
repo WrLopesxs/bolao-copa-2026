@@ -104,7 +104,8 @@ svg.ic { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-wid
 
 /* Em telas pequenas a navegação vira barra fixa inferior */
 @media (max-width: 680px) {
-  .topbar-inner { padding: 10px 14px; gap: 10px; }
+  /* a nav vira fixa (sai do fluxo): separa a marca das ações nos cantos */
+  .topbar-inner { padding: 10px 14px; gap: 10px; justify-content: space-between; }
   .brand { font-size: .96rem; }
   .nav {
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
@@ -138,15 +139,49 @@ svg.ic { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-wid
   .score-final { font-size: 1.05rem; min-width: 50px; }
   .score-box input { width: 40px; height: 40px; }
 
+  /* botão de salvar palpite ocupa a largura toda (alvo de toque maior) */
+  .match-actions .btn.small { flex: 1; padding: 9px 13px; }
+
   /* formulários do admin empilham em vez de espremer */
   .inline-form { flex-direction: column; align-items: stretch; }
   .inline-form .field { width: 100%; }
   .inline-form .btn { width: 100%; }
+  .mini-input { width: 100% !important; }
 
+  /* tabelas rolam na horizontal em vez de espremer as colunas */
+  .table-wrap { margin: 0 -15px; padding: 0 15px; }
+  .table-wrap th, .table-wrap td { white-space: nowrap; }
   table.rank th, table.rank td { padding: 9px 6px; font-size: .82rem; }
-  .modal-card { padding: 18px; border-radius: 14px; }
+
+  /* modal vira "folha" colada na base da tela */
+  .modal { align-items: flex-end; padding: 0; }
+  .modal-card {
+    max-width: 100%; max-height: 88vh;
+    border-radius: 16px 16px 0 0; border-bottom: none;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+    animation: sheetUp .25s ease both;
+  }
+
+  /* filtros e abas em uma linha só, com rolagem lateral */
+  .filters, .admin-tabs {
+    flex-wrap: nowrap; overflow-x: auto;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    margin-left: -13px; margin-right: -13px;
+    padding-left: 13px; padding-right: 13px; padding-bottom: 4px;
+  }
+  .filters::-webkit-scrollbar, .admin-tabs::-webkit-scrollbar { display: none; }
   .filters { gap: 6px; }
-  .chip { padding: 6px 11px; font-size: .78rem; }
+  .chip { padding: 7px 12px; font-size: .78rem; flex-shrink: 0; }
+}
+@keyframes sheetUp { from { opacity: 0; transform: translateY(36px); } to { opacity: 1; transform: none; } }
+
+/* telas bem estreitas: encolhe placar e nomes para nada estourar */
+@media (max-width: 380px) {
+  .team .name { font-size: .78rem; }
+  .team img.flag { width: 21px; height: 14px; }
+  .score-box input { width: 36px; height: 38px; font-size: 1rem; }
+  .score-final { font-size: .95rem; min-width: 44px; }
+  .stat .num { font-size: 1.15rem; }
 }
 
 /* ------------------------------------------------ layout geral */
@@ -178,7 +213,9 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px 16px 48px; }
 
 /* ------------------------------------------------ login / cadastro */
 .auth-wrap {
-  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  /* 100dvh acompanha a barra do navegador no celular (100vh fica "torto") */
+  min-height: 100vh; min-height: 100dvh;
+  display: flex; align-items: center; justify-content: center;
   background:
     radial-gradient(1200px 600px at 80% -10%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
     var(--bg);
