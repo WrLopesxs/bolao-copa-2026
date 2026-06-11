@@ -17,7 +17,7 @@ Tempo estimado: ~15 minutos. Tudo no plano gratuito. Você vai criar 3 contas gr
    git add .
    git commit -m "Bolao Copa 2026"
    git branch -M main
-   git remote add origin https://github.com/SEU-USUARIO/bolao-copa-2026.git
+   git remote add origin https://github.com/WrLopesxs/bolao-copa-2026.git
    git push -u origin main
    ```
 
@@ -49,7 +49,7 @@ Tempo estimado: ~15 minutos. Tudo no plano gratuito. Você vai criar 3 contas gr
 4. Clique em **Deploy** e aguarde ~1 minuto.
 5. A Vercel te dá um link tipo `https://bolao-copa-2026.vercel.app`. **Esse é o link fixo** para mandar aos colegas.
 
----
+--- 
 
 ## Passo 4 — Primeiro acesso
 
