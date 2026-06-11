@@ -67,6 +67,17 @@ function openModal(html) {
   $('#modal').hidden = false;
 }
 function closeModal() { $('#modal').hidden = true; }
+
+// Clicar em qualquer foto de avatar (ranking, comparação, online) amplia no lightbox.
+document.addEventListener('click', (e) => {
+  const img = e.target.closest('img.avatar');
+  if (!img) return;
+  e.stopPropagation();
+  $('#lightbox').querySelector('img').src = img.src;
+  $('#lightbox').hidden = false;
+});
+$('#lightbox').addEventListener('click', () => { $('#lightbox').hidden = true; });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#lightbox').hidden = true; });
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
 
 // ------------------------------------------------------------ tema

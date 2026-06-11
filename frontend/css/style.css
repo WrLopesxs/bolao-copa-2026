@@ -378,6 +378,19 @@ table.rank td.pos { font-weight: 700; width: 46px; }
 
 /* ------------------------------------------------ toasts */
 .toasts { position: fixed; top: 14px; right: 14px; z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: 92vw; }
+
+/* ------------------------------------------------ lightbox (foto ampliada) */
+img.avatar { cursor: zoom-in; }
+#lightbox {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0, 0, 0, .78);
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-out; animation: fadeUp .15s ease both;
+}
+#lightbox img {
+  max-width: min(86vw, 440px); max-height: 80vh;
+  border-radius: 16px; box-shadow: 0 12px 48px rgba(0, 0, 0, .5);
+}
 .toast {
   background: var(--text); color: var(--card);
   border-radius: 10px; padding: 11px 16px; box-shadow: 0 8px 28px rgba(0,0,0,.28);
