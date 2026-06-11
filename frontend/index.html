@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#117a4b">
+  <title>Bolão Copa 2026</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>⚽</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Barra superior -->
+  <header class="topbar" id="topbar" hidden>
+    <div class="topbar-inner">
+      <a class="brand" href="#/dashboard"><span class="brand-mark">⚽</span><span>Bolão <b>Copa 26</b></span></a>
+      <nav class="nav" id="nav">
+        <a href="#/dashboard" data-route="dashboard">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M3 10.2 12 3l9 7.2V20a1 1 0 0 1-1 1h-5.2v-6.4H9.2V21H4a1 1 0 0 1-1-1z"/></svg>
+          <span>Início</span></a>
+        <a href="#/jogos" data-route="jogos">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r=".8" fill="currentColor"/></svg>
+          <span>Palpites</span></a>
+        <a href="#/ranking" data-route="ranking">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M8 21h8M12 21v-4M7 4h10v6a5 5 0 0 1-10 0z"/><path d="M7 5.5H4.5a2 2 0 0 0 2.2 4M17 5.5h2.5a2 2 0 0 1-2.2 4"/></svg>
+          <span>Ranking</span></a>
+        <a href="#/perfil" data-route="perfil">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c.8-3.6 4-5 7.5-5s6.7 1.4 7.5 5"/></svg>
+          <span>Perfil</span></a>
+        <a href="#/admin" data-route="admin" id="navAdmin" hidden>
+          <svg class="ic" viewBox="0 0 24 24"><path d="M4 7.5h9M17.5 7.5H20M4 16.5h2.5M11 16.5h9"/><circle cx="15" cy="7.5" r="2.2"/><circle cx="8.5" cy="16.5" r="2.2"/></svg>
+          <span>Admin</span></a>
+      </nav>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="themeBtn" title="Alternar tema">◐</button>
+        <button class="icon-btn" id="logoutBtn" title="Sair">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M14 4H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 8.5 21.5 12 18 15.5"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Conteúdo (as telas são renderizadas aqui pelo app.js) -->
+  <main id="app"></main>
+
+  <!-- Notificações (toasts) -->
+  <div id="toasts" class="toasts"></div>
+
+  <!-- Modal genérico (comparação de palpites, edição admin, etc.) -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card" id="modalCard"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

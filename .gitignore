@@ -1,0 +1,10 @@
+node_modules/
+database/pgdata/
+*.db
+*.db-journal
+cloudflared.exe
+.env
+.env.local
+.vercel/
+npm-debug.log*
+.DS_Store
