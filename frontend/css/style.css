@@ -189,6 +189,9 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px 16px 48px; }
 .page-title { font-size: 1.32rem; font-weight: 700; letter-spacing: -.02em; margin: 4px 0 4px; }
 .page-sub { color: var(--muted); font-size: .86rem; margin-bottom: 18px; }
 .grid { display: grid; gap: 14px; }
+/* itens de grid não encolhem além do conteúdo por padrão (min-width:auto);
+   sem isso, a tabela interna alarga a coluna e os cards vazam da tela */
+.grid > * { min-width: 0; }
 @media (min-width: 800px) {
   .grid.cols-2 { grid-template-columns: 1fr 1fr; }
 }
