@@ -110,9 +110,16 @@ const connectWS = startRealtime;
  * interactive=false: só renova a assinatura se a permissão já foi dada
  * (chamado a cada login); interactive=true: pede a permissão (botão no Perfil).
  */
+const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+const isInstalled = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
 async function setupPush(interactive = false) {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
-    if (interactive) toast('Este navegador não suporta notificações push.<br>No iPhone: adicione o site à Tela de Início primeiro.', 'err');
+  if (!pushSupported) {
+    if (interactive) {
+      if (isIOS && !isInstalled) pushInstallModal();
+      else toast('Este navegador não suporta notificações push.', 'err');
+    }
     return;
   }
   try {
@@ -122,7 +129,7 @@ async function setupPush(interactive = false) {
       perm = await Notification.requestPermission(); // 1º await: ainda dentro do toque
     }
     if (perm !== 'granted') {
-      if (interactive) toast('Permissão negada. Libere as notificações do site nas configurações do navegador.', 'err');
+      if (interactive) pushBlockedModal(); // negado: ensina a desbloquear
       return;
     }
     await navigator.serviceWorker.register('/sw.js');
@@ -143,6 +150,60 @@ async function setupPush(interactive = false) {
 function urlB64(s) {
   const b64 = (s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
   return Uint8Array.from([...atob(b64)].map(c => c.charCodeAt(0)));
+}
+
+/** Permissão negada anteriormente: o navegador guarda a escolha; ensina a liberar. */
+function pushBlockedModal() {
+  openModal(`
+    <div class="modal-head">
+      <h3>🔕 Notificações bloqueadas</h3>
+      <button class="close-x" onclick="document.getElementById('modal').hidden=true">✕</button>
+    </div>
+    <p class="muted" style="margin-bottom:12px">Em algum momento a permissão foi negada e o navegador guardou essa escolha. Para liberar:</p>
+    <p style="margin-bottom:10px"><b>Chrome:</b> toque no <b>cadeado 🔒</b> (ou ⚙️) ao lado do endereço do site → <b>Permissões</b> → <b>Notificações</b> → <b>Permitir</b>.</p>
+    <p style="margin-bottom:10px"><b>Não achou?</b> Menu <b>⋮</b> → Configurações → Configurações do site → Notificações → procure este site e mude para <b>Permitir</b>.</p>
+    <p style="margin-bottom:16px"><b>iPhone</b> (instalado na Tela de Início): Ajustes do iPhone → <b>Notificações</b> → <b>Bolão</b> → Permitir.</p>
+    <button class="btn" id="pushRetry">Já liberei — ativar agora</button>`);
+  $('#pushRetry').addEventListener('click', () => { closeModal(); setupPush(true); });
+}
+
+/** iPhone no Safari sem instalar: a Apple só permite push em site instalado. */
+function pushInstallModal() {
+  openModal(`
+    <div class="modal-head">
+      <h3>📲 Falta um passo no iPhone</h3>
+      <button class="close-x" onclick="document.getElementById('modal').hidden=true">✕</button>
+    </div>
+    <p class="muted" style="margin-bottom:12px">No iPhone, notificações só funcionam com o site instalado como app:</p>
+    <p style="margin-bottom:8px">1. Toque em <b>Compartilhar</b> (quadrado com seta ↑) na barra do Safari.</p>
+    <p style="margin-bottom:8px">2. Escolha <b>Adicionar à Tela de Início</b>.</p>
+    <p style="margin-bottom:16px">3. Abra o <b>Bolão</b> pelo novo ícone e ative as notificações no Perfil.</p>
+    <button class="btn ghost" onclick="document.getElementById('modal').hidden=true">Entendi</button>`);
+}
+
+/** Convite mostrado logo após o login. */
+function offerPush() {
+  if (!pushSupported) {
+    if (isIOS && !isInstalled) pushInstallModal();
+    return;
+  }
+  if (Notification.permission === 'granted') { setupPush(); return; } // só renova a assinatura
+  if (Notification.permission === 'denied') { pushBlockedModal(); return; }
+  openModal(`
+    <div class="modal-head">
+      <h3>🔔 Ativar notificações?</h3>
+      <button class="close-x" onclick="document.getElementById('modal').hidden=true">✕</button>
+    </div>
+    <p class="muted" style="margin-bottom:16px">
+      Receba um aviso no celular quando você <b>ganhar pontos</b> e quando saírem
+      resultados — mesmo com o site fechado.
+    </p>
+    <div class="row-actions">
+      <button class="btn" id="pushYes" style="flex:1">Ativar notificações</button>
+      <button class="btn ghost" id="pushNo" style="flex:1">Agora não</button>
+    </div>`);
+  $('#pushYes').addEventListener('click', () => { closeModal(); setupPush(true); });
+  $('#pushNo').addEventListener('click', closeModal);
 }
 
 // ------------------------------------------------------------ presença online
@@ -231,7 +292,7 @@ function viewAuth(mode) {
         state.token = data.token; state.user = data.user;
         localStorage.setItem('token', data.token);
         if (data.firstUser) toast('Você é o primeiro usuário e virou <b>administrador</b>.', 'gold');
-        setupPush(true); // pede permissão de notificação logo após o login
+        offerPush(); // convite para ativar notificações logo após o login
         connectWS();
         location.hash = '#/dashboard';
       } catch (err) { toast(esc(err.message), 'err'); btn.disabled = false; }
