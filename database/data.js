@@ -116,6 +116,15 @@ CREATE TABLE IF NOT EXISTS presence (
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- assinaturas de notificação push (um aparelho = uma linha)
+CREATE TABLE IF NOT EXISTS push_subs (
+  endpoint   TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_pred_match ON predictions(match_id);
 CREATE INDEX IF NOT EXISTS idx_pred_user  ON predictions(user_id);
 `;

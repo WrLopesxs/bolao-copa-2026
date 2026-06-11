@@ -7,6 +7,7 @@
  *   Gols de um dos times corretos ..........  2 pontos (por time)
  */
 const { get, all, run } = require('../database/data');
+const teams = require('../database/teams.json');
 
 const POINTS = { EXACT: 10, OUTCOME: 5, TEAM_GOALS: 2 };
 
@@ -39,6 +40,27 @@ async function scoreMatch(matchId) {
       [p.user_id, matchId, pts]
     );
     results.push({ user_id: p.user_id, points: pts, delta });
+  }
+
+  // Notifica no celular quem acabou de ganhar pontos (delta > 0 evita
+  // reenvio quando o rescoreAll repassa jogos já pontuados)
+  const gained = results.filter((r) => r.delta > 0);
+  if (gained.length) {
+    try {
+      const { sendPush } = require('../api/push');
+      const ranking = await getRanking();
+      const pos = new Map(ranking.map((r) => [r.id, r.position]));
+      const t = (name) => teams[name]?.pt || name;
+      const placar = `${t(match.home_team)} ${match.home_score} x ${match.away_score} ${t(match.away_team)}`;
+      for (const g of gained) {
+        await sendPush(g.user_id, {
+          title: `⚽ Você ganhou +${g.delta} ponto${g.delta > 1 ? 's' : ''}!`,
+          body: `${placar} — você está em ${pos.get(g.user_id)}º lugar no ranking.`,
+          url: '/#/dashboard',
+          tag: 'jogo-' + match.id,
+        });
+      }
+    } catch (e) { console.error('[push] falha ao notificar:', e.message); }
   }
   return results;
 }

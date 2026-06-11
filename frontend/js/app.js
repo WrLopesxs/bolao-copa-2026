@@ -87,6 +87,7 @@ function startRealtime() {
   stopRealtime();
   if (!state.token) return;
   beat(); // imediato (registra presença + carrega quem está online)
+  setupPush(); // renova a assinatura push se a permissão já foi concedida
   rtTimers.push(setInterval(beat, 20000));   // presença a cada 20s
   rtTimers.push(setInterval(() => {          // auto-refresh a cada 15s
     const r = (location.hash.replace('#/', '') || 'dashboard').split('/')[0];
@@ -102,6 +103,47 @@ async function beat() {
 }
 // mantém o nome antigo usado em alguns pontos do código
 const connectWS = startRealtime;
+
+// ------------------------------------------------------------ push no celular
+/**
+ * Ativa as notificações push neste aparelho.
+ * interactive=false: só renova a assinatura se a permissão já foi dada
+ * (chamado a cada login); interactive=true: pede a permissão (botão no Perfil).
+ */
+async function setupPush(interactive = false) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    if (interactive) toast('Este navegador não suporta notificações push.<br>No iPhone: adicione o site à Tela de Início primeiro.', 'err');
+    return;
+  }
+  try {
+    let perm = Notification.permission;
+    if (perm === 'default') {
+      if (!interactive) return;
+      perm = await Notification.requestPermission(); // 1º await: ainda dentro do toque
+    }
+    if (perm !== 'granted') {
+      if (interactive) toast('Permissão negada. Libere as notificações do site nas configurações do navegador.', 'err');
+      return;
+    }
+    await navigator.serviceWorker.register('/sw.js');
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { key } = await api('/push/key');
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(key) });
+    }
+    await api('/push/subscribe', { method: 'POST', body: sub.toJSON() });
+    if (interactive) toast('🔔 Notificações ativadas neste aparelho!');
+  } catch (e) {
+    console.warn('[push]', e);
+    if (interactive) toast('Não foi possível ativar: ' + esc(e.message), 'err');
+  }
+}
+/** Converte a chave VAPID (base64url) para o formato do pushManager. */
+function urlB64(s) {
+  const b64 = (s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from([...atob(b64)].map(c => c.charCodeAt(0)));
+}
 
 // ------------------------------------------------------------ presença online
 /** Atualiza o card "online agora" se ele estiver na tela. */
@@ -189,7 +231,7 @@ function viewAuth(mode) {
         state.token = data.token; state.user = data.user;
         localStorage.setItem('token', data.token);
         if (data.firstUser) toast('Você é o primeiro usuário e virou <b>administrador</b>.', 'gold');
-        Notification?.requestPermission?.();
+        setupPush(true); // pede permissão de notificação logo após o login
         connectWS();
         location.hash = '#/dashboard';
       } catch (err) { toast(esc(err.message), 'err'); btn.disabled = false; }
@@ -479,8 +521,17 @@ async function viewPerfil() {
         <p><b>E-mail:</b> ${esc(user.email)}</p>
         <p><b>Cadastro:</b> ${new Date(user.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('pt-BR')}</p>
         <p><b>Tipo:</b> ${user.is_admin ? 'Administrador' : 'Participante'}</p>
+        <br>
+        <h3>🔔 Notificações</h3>
+        <p class="muted" style="margin-bottom:10px">
+          Receba um aviso no celular quando você ganhar pontos — mesmo com o site fechado.
+          <br><b>No iPhone:</b> primeiro toque em Compartilhar → <b>Adicionar à Tela de Início</b> e abra por lá.
+        </p>
+        <button class="btn ghost" id="pushBtn">Ativar notificações neste aparelho</button>
       </div>
     </div>`;
+
+  $('#pushBtn').addEventListener('click', () => setupPush(true));
 
   let photoData = null;
   $('#photoInput').addEventListener('change', (e) => {

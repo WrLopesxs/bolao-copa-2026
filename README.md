@@ -45,7 +45,7 @@ Exemplo (real Brasil 2x1 Argentina): palpite 2x1 = 10; 2x0 = 7; 1x1 = 2. Ajustá
 
 ## Funcionalidades
 
-Login, cadastro e recuperação de senha (código aparece no painel do admin — sem servidor de e-mail). Dashboard com posição, pontos, próximos jogos, resultados, gráfico de evolução, Top 10 e **presença online** (quem está conectado). Palpites com bloqueio automático 1h antes do jogo. Comparação de palpites por jogo (visível só após o bloqueio). Ranking geral e por fase com medalhas. Filtros de jogos. Painel admin: usuários, edição de jogos/resultados, liberar/bloquear palpites, chave da API-Football e export do ranking para Excel. Tema Copa, bandeiras, modo escuro e layout responsivo (mobile-first).
+Login, cadastro e recuperação de senha (código aparece no painel do admin — sem servidor de e-mail). Dashboard com posição, pontos, próximos jogos, resultados, gráfico de evolução, Top 10 e **presença online** (quem está conectado). Palpites com bloqueio automático 1h antes do jogo. Comparação de palpites por jogo (visível só após o bloqueio). Ranking geral e por fase com medalhas. Filtros de jogos. Painel admin: usuários, edição de jogos/resultados, liberar/bloquear palpites, chave da API-Football e export do ranking para Excel. Tema Copa, bandeiras, modo escuro e layout responsivo (mobile-first). **Notificações push no celular**: quando um resultado é lançado, quem pontuou recebe um aviso tipo "⚽ Você ganhou +10 pontos! Brasil 2 x 1 Argentina — você está em 3º lugar", mesmo com o site fechado (ative em **Perfil → Notificações**; no iPhone é preciso antes adicionar o site à Tela de Início).
 
 ## Resultados automáticos (API-Football)
 

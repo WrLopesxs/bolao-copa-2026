@@ -9,6 +9,7 @@ const { get, all, run, getSetting, setSetting } = require('../database/data');
 const { hashPassword, verifyPassword, createToken, requireAuth, requireAdmin } = require('../backend/auth');
 const { calcPoints, scoreMatch, rescoreAll, getRanking, POINTS } = require('../backend/scoring');
 const { syncResults, syncIfStale } = require('./football-api');
+const { getVapid, saveSubscription } = require('./push');
 const teams = require('../database/teams.json');
 
 const router = express.Router();
@@ -179,6 +180,19 @@ router.post('/predictions', requireAuth, h(async (req, res) => {
     DO UPDATE SET home_pred=excluded.home_pred, away_pred=excluded.away_pred, updated_at=now()`,
     [req.user.id, matchId, home, away]);
   res.json({ ok: true, message: 'Palpite salvo!' });
+}));
+
+// ======================================================== NOTIFICAÇÕES
+router.get('/push/key', requireAuth, h(async (req, res) => {
+  res.json({ key: (await getVapid()).publicKey });
+}));
+
+router.post('/push/subscribe', requireAuth, h(async (req, res) => {
+  const s = req.body || {};
+  if (!s.endpoint || !s.keys?.p256dh || !s.keys?.auth)
+    return res.status(400).json({ error: 'Assinatura de notificação inválida.' });
+  await saveSubscription(req.user.id, s);
+  res.json({ ok: true });
 }));
 
 // ============================================================= RANKING
