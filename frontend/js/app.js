@@ -645,6 +645,19 @@ async function viewAdmin(tab = 'jogos') {
           <p class="muted" style="margin-bottom:10px">Baixa o ranking completo em CSV (abre no Excel).</p>
           <button class="btn gold" id="exportBtn">Exportar ranking (Excel)</button>
         </div>
+        <div class="card">
+          <h3>🔔 Notificações</h3>
+          <p class="muted" style="margin-bottom:10px">
+            Envie um aviso no celular dos participantes (só chega para quem ativou as
+            notificações no Perfil). Deixe em branco para usar a mensagem de teste padrão.
+          </p>
+          <div class="field"><label>Título</label><input id="ntTitle" placeholder="🔔 Bolão Copa 2026"></div>
+          <div class="field"><label>Mensagem</label><input id="ntBody" placeholder="Teste: as notificações estão funcionando!"></div>
+          <div class="row-actions">
+            <button class="btn small ghost" id="ntTest">Testar (só você)</button>
+            <button class="btn small" id="ntAll">Enviar a todos</button>
+          </div>
+        </div>
       </div>`;
   }
 
@@ -698,6 +711,24 @@ async function viewAdmin(tab = 'jogos') {
     } catch (err) { toast(esc(err.message), 'err'); }
     e.target.disabled = false;
   });
+  const sendNotice = async (btn, everyone) => {
+    if (everyone && !confirm('Enviar esta notificação para TODOS os participantes?')) return;
+    btn.disabled = true;
+    try {
+      const d = await api('/admin/push-test', {
+        method: 'POST',
+        body: { title: $('#ntTitle').value, body: $('#ntBody').value, everyone },
+      });
+      toast(d.devices
+        ? `Notificação enviada para <b>${d.devices}</b> aparelho(s) de ${d.users} usuário(s).`
+        : 'Nenhum aparelho inscrito ainda. Ative as notificações no Perfil deste celular primeiro.',
+        d.devices ? '' : 'err');
+    } catch (err) { toast(esc(err.message), 'err'); }
+    btn.disabled = false;
+  };
+  $('#ntTest')?.addEventListener('click', (e) => sendNotice(e.target, false));
+  $('#ntAll')?.addEventListener('click', (e) => sendNotice(e.target, true));
+
   $('#exportBtn')?.addEventListener('click', async () => {
     // Baixa o CSV autenticado e dispara o download
     const res = await fetch('/api/admin/export', { headers: { Authorization: 'Bearer ' + state.token } });

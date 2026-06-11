@@ -9,7 +9,7 @@ const { get, all, run, getSetting, setSetting } = require('../database/data');
 const { hashPassword, verifyPassword, createToken, requireAuth, requireAdmin } = require('../backend/auth');
 const { calcPoints, scoreMatch, rescoreAll, getRanking, POINTS } = require('../backend/scoring');
 const { syncResults, syncIfStale } = require('./football-api');
-const { getVapid, saveSubscription } = require('./push');
+const { getVapid, saveSubscription, sendPush } = require('./push');
 const teams = require('../database/teams.json');
 
 const router = express.Router();
@@ -279,6 +279,26 @@ router.get('/admin/settings', requireAdmin, h(async (req, res) => {
 router.put('/admin/settings', requireAdmin, h(async (req, res) => {
   if (typeof req.body?.api_football_key === 'string') await setSetting('api_football_key', req.body.api_football_key.trim());
   res.json({ ok: true });
+}));
+
+// Envia uma notificação manual: só para o admin (teste) ou para todos
+router.post('/admin/push-test', requireAdmin, h(async (req, res) => {
+  const { title, body, everyone } = req.body || {};
+  const payload = {
+    title: String(title || '').trim() || '🔔 Bolão Copa 2026',
+    body: String(body || '').trim() || 'Teste: as notificações estão funcionando!',
+    url: '/#/dashboard',
+    tag: 'aviso-' + Date.now(),
+  };
+  const ids = everyone
+    ? (await all('SELECT DISTINCT user_id FROM push_subs')).map((r) => r.user_id)
+    : [req.user.id];
+  let devices = 0;
+  for (const id of ids) {
+    devices += (await get('SELECT COUNT(*)::int AS c FROM push_subs WHERE user_id = $1', [id])).c;
+    await sendPush(id, payload);
+  }
+  res.json({ ok: true, users: ids.length, devices });
 }));
 
 router.post('/admin/sync', requireAdmin, h(async (req, res) => {
