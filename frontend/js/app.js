@@ -421,6 +421,22 @@ function isLockedNow(m, now = Date.now()) {
 }
 let lockWatch = null;
 
+// Tempo restante até o bloqueio: "3d 4h" quando falta muito, "2h 15min" / "40min" quando está perto.
+function fmtCountdown(ms) {
+  const min = Math.max(0, Math.floor(ms / 60000));
+  const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60), mm = min % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${mm}min`;
+  return `${mm}min`;
+}
+// Atualiza só o texto dos cronômetros (não re-renderiza, para não apagar placares digitados)
+function updateCountdowns() {
+  const t = Date.now();
+  document.querySelectorAll('[data-lock-at]').forEach(el => {
+    el.textContent = 'Trava em ' + fmtCountdown(Number(el.dataset.lockAt) - t);
+  });
+}
+
 async function viewJogos() {
   const { matches } = await api('/matches');
   state.matches = matches;
@@ -453,10 +469,14 @@ async function viewJogos() {
     <div class="match-card" data-id="${m.id}">
       <div class="match-meta">
         <span>${esc(STAGES[m.stage])}${m.group_name ? ' · Grupo ' + m.group_name : ''} · ${fmtDate(m.date_utc)} · ${esc(m.location)}</span>
+        <span class="meta-badges">
         ${m.status === 'live' ? '<span class="badge live">AO VIVO</span>'
           : m.status === 'finished' ? '<span class="badge fin">Encerrado</span>'
-          : locked ? '<span class="badge fin">Bloqueado</span>' : '<span class="badge sched">Aberto</span>'}
+          : locked ? '<span class="badge fin">Bloqueado</span>'
+          : `${m.lock_mode !== 'open'
+              ? `<span class="badge timer" data-lock-at="${new Date(m.date_utc).getTime() - LOCK_BEFORE_MS}"></span>` : ''}<span class="badge sched">Aberto</span>`}
         ${pred?.points != null ? `<span class="badge pts">+${pred.points} pts</span>` : ''}
+        </span>
       </div>
       <div class="match-row">
         <div class="team home"><span class="name">${esc(m.home_pt)}</span>${flag(m.home_flag, m.home_pt)}</div>
@@ -556,13 +576,16 @@ async function viewJogos() {
   // Evita que clicar nos inputs abra a comparação
   app.querySelectorAll('.score-box input').forEach(i => i.addEventListener('click', e => e.stopPropagation()));
   bindCompare();
+  updateCountdowns();
 
   // Quando o horário de bloqueio chega, re-renderiza para o botão "Editar" sumir
   // sem precisar recarregar a página (não roda se o usuário estiver digitando um placar).
+  // Também mantém os cronômetros "Trava em ..." atualizados.
   if (lockWatch) clearInterval(lockWatch);
   lockWatch = setInterval(() => {
     const r = (location.hash.replace('#/', '') || 'dashboard').split('/')[0];
     if (r !== 'jogos') { clearInterval(lockWatch); lockWatch = null; return; }
+    updateCountdowns();
     const justLocked = state.matches.some(m => !m.locked && isLockedNow(m));
     const typing = document.activeElement && document.activeElement.matches('.score-box input');
     if (justLocked && !typing) viewJogos();
