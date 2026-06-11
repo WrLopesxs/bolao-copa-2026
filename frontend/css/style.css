@@ -305,13 +305,13 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px 16px 48px; }
 .team.home { justify-content: flex-end; text-align: right; }
 .team .name { font-weight: 600; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team img.flag { width: 28px; height: 19px; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); }
-.score-box { display: flex; align-items: center; gap: 6px; }
+.score-box { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .score-box input {
   width: 44px; height: 42px; text-align: center; font-size: 1.1rem; font-weight: 700;
   padding: 0; border-radius: 9px;
 }
 .score-box .x { color: var(--muted); font-weight: 600; font-size: .8rem; }
-.score-final { font-size: 1.18rem; font-weight: 800; letter-spacing: -.02em; min-width: 64px; text-align: center; }
+.score-final { font-size: 1.18rem; font-weight: 800; letter-spacing: -.02em; min-width: 64px; text-align: center; white-space: nowrap; flex-shrink: 0; }
 .match-actions { display: flex; justify-content: center; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
 .my-pred { text-align: center; font-size: .78rem; color: var(--muted); margin-top: 7px; }
 
