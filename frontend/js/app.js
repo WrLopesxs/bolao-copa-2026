@@ -400,8 +400,8 @@ async function viewDashboard() {
     </div>`;
   refreshOnline();
 
-  // Gráfico de evolução (Chart.js)
-  if (d.evolution.length) {
+  // Gráfico de evolução (Chart.js) — se a lib não carregar, o resto da tela sobrevive
+  if (d.evolution.length && typeof Chart !== 'undefined') try {
     state.chart?.destroy();
     state.chart = new Chart($('#evo'), {
       type: 'line',
@@ -415,7 +415,7 @@ async function viewDashboard() {
       },
       options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
     });
-  }
+  } catch (e) { console.warn('[chart]', e); }
   bindCompare();
 }
 
