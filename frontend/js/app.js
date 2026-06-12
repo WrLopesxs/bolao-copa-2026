@@ -1736,16 +1736,21 @@ async function viewRaio() {
   const s = d.stats;
   if (!s.length) { app.innerHTML = '<div class="card"><p class="muted">Sem dados ainda.</p></div>'; return; }
 
-  const maxBy = (arr, fn, min = 1) => {
-    const best = [...arr].sort((a, b) => fn(b) - fn(a))[0];
-    return best && fn(best) >= min ? best : null;
+  // Prêmios sem repetir pessoa: cada troféu vai pro melhor candidato que
+  // ainda não ganhou nenhum (em empates, espalha a glória pela galera).
+  const used = new Set([s[0].id]); // o líder já leva o primeiro
+  const pickBest = (fn, min = 1) => {
+    const cand = [...s].sort((a, b) => fn(b) - fn(a))
+      .find((x) => fn(x) >= min && !used.has(x.id));
+    if (cand) used.add(cand.id);
+    return cand || null;
   };
   const awards = [
     ['🥇 Líder', s[0], `${s[0].total} pts`],
-    ['🎯 Sniper', maxBy(s, (x) => x.exacts), (x) => `${x.exacts} placares exatos`],
-    ['🦓 Rei da Zebra', maxBy(s, (x) => x.zebras), (x) => `${x.zebras} zebra${x.zebras > 1 ? 's' : ''}`],
-    ['📈 Melhor rodada', maxBy(s, (x) => x.bestDayPts), (x) => `${x.bestDayPts} pts em ${fmtDay(x.bestDay)}`],
-    ['❄️ Pé frio', maxBy(s, (x) => x.zeros, 3), (x) => `${x.zeros} palpites zerados`],
+    ['🎯 Sniper', pickBest((x) => x.exacts), (x) => `${x.exacts} placares exatos`],
+    ['🦓 Rei da Zebra', pickBest((x) => x.zebras), (x) => `${x.zebras} zebra${x.zebras > 1 ? 's' : ''}`],
+    ['📈 Melhor rodada', pickBest((x) => x.bestDayPts), (x) => `${x.bestDayPts} pts em ${fmtDay(x.bestDay)}`],
+    ['❄️ Pé frio', pickBest((x) => x.zeros, 3), (x) => `${x.zeros} palpites zerados`],
   ];
 
   app.innerHTML = `
@@ -1795,6 +1800,13 @@ async function viewRaio() {
     const me = s.find((x) => x.id === state.user.id);
     if (me?.evolution.length && !racers.includes(me)) racers = [...racers.slice(0, 7), me];
     const days = [...new Set(racers.flatMap((x) => x.evolution.map((e) => e.day)))].sort();
+    // primeiro nome na legenda; se repetir, acrescenta a inicial do sobrenome
+    const firsts = racers.map((x) => x.name.trim().split(/\s+/)[0] || '?');
+    const legend = racers.map((x, i) => {
+      const dup = firsts.filter((n) => n === firsts[i]).length > 1;
+      const sur = x.name.trim().split(/\s+/)[1]?.[0];
+      return dup && sur ? `${firsts[i]} ${sur}.` : firsts[i];
+    });
     state.chart?.destroy();
     state.chart = new Chart($('#race'), {
       type: 'line',
@@ -1804,7 +1816,7 @@ async function viewRaio() {
           let last = 0;
           const byDay = new Map(x.evolution.map((e) => [e.day, e.total]));
           return {
-            label: x.name.split(' ')[0],
+            label: legend[i],
             data: days.map((day) => (last = byDay.get(day) ?? last)),
             borderColor: COLORS[i % COLORS.length],
             backgroundColor: COLORS[i % COLORS.length],
