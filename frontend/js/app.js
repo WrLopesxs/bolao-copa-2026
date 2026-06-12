@@ -195,6 +195,53 @@ $('#lightbox').addEventListener('click', () => { $('#lightbox').hidden = true; }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#lightbox').hidden = true; });
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
 
+// ------------------------------------------------------------ ajuda
+function openHelp() {
+  openModal(`
+    <div class="modal-head">
+      <h3>❓ Como funciona o palpitei</h3>
+      <button class="close-x" onclick="document.getElementById('modal').hidden=true">✕</button>
+    </div>
+    <div class="help-body">
+      <h4>⚽ Dar palpites</h4>
+      <p>Na aba <b>Palpites</b>, digite o placar de cada jogo e salve (ou use
+      <b>“Salvar todos os palpites”</b> para mandar vários de uma vez). Dá para editar
+      quantas vezes quiser até o jogo travar.</p>
+
+      <h4>🔒 Quando trava</h4>
+      <p>Os palpites de cada jogo travam <b>1 hora antes</b> de a bola rolar — o card
+      mostra um cronômetro (“Trava em…”). Depois disso o palpite fica bloqueado e os
+      palpites de todos os participantes ficam visíveis no botão <b>“Ver palpites”</b>.</p>
+
+      <h4>🏆 Pontuação</h4>
+      <ul>
+        <li><b>10 pontos</b> — placar exato (ex.: cravou 2 a 1)</li>
+        <li><b>5 pontos</b> — acertou quem venceu (ou o empate), mas não o placar</li>
+        <li><b>2 pontos</b> — acertou os gols de um dos times</li>
+      </ul>
+      <p class="muted">Alguns grupos personalizam esses valores — confira no ranking do seu grupo.</p>
+
+      <h4>📺 Ao vivo</h4>
+      <p>Com o jogo rolando, o card mostra o <b>placar em tempo real</b> ao lado do seu
+      palpite e um link para <b>assistir na CazéTV</b>. Quando o jogo acaba, a pontuação
+      de todo mundo é calculada automaticamente.</p>
+
+      <h4>📊 Ranking e Início</h4>
+      <p>A aba <b>Ranking</b> mostra a classificação do grupo (geral e por fase). A aba
+      <b>Início</b> traz seu resumo: posição, pontos, acertos e os próximos jogos.</p>
+
+      <h4>💬 Chat</h4>
+      <p>A aba <b>Chat</b> é o mural do grupo — converse, mande emojis e provoque a galera.
+      Toque na foto de alguém para ampliar.</p>
+
+      <h4>🔔 Notificações</h4>
+      <p>No <b>Perfil</b>, ative as notificações para receber um aviso no celular quando
+      você ganhar pontos — mesmo com o site fechado. <i>No iPhone, primeiro adicione o
+      site à Tela de Início.</i></p>
+    </div>`);
+}
+$('#helpBtn').addEventListener('click', openHelp);
+
 // ------------------------------------------------------------ tema
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
@@ -979,6 +1026,23 @@ async function viewAdmin(tab = 'jogos') {
           <button class="btn small" type="submit">Adicionar</button>
         </form>
       </div><br>
+      <div class="card" style="border-color:var(--gold)">
+        <h3>🛠️ Corrigir pontuação <span class="tag">temporário</span></h3>
+        <p class="muted" style="margin-bottom:10px">
+          Mostra os palpites de um participante com os pontos de cada um. Use “Remover”
+          para apagar um palpite que entrou errado — o total cai exatamente os pontos
+          daquele jogo e o ranking se ajusta.
+        </p>
+        <div class="inline-form">
+          <div class="field"><label>Participante</label>
+            <select id="fixUser">
+              <option value="">Selecione…</option>
+              ${users.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}
+            </select></div>
+          <button class="btn small" id="fixLoad" type="button">Ver palpites e pontos</button>
+        </div>
+        <div id="fixList" style="margin-top:12px"></div>
+      </div><br>
       <div class="card"><div class="table-wrap"><table class="rank">
         <tr><th>Nome</th><th>E-mail</th><th>Setor</th><th>Palpites</th><th>Código recup.</th><th>Ações</th></tr>
         ${users.map(u => `
@@ -1085,6 +1149,42 @@ async function viewAdmin(tab = 'jogos') {
       viewAdmin('usuarios');
     } catch (err) { toast(esc(err.message), 'err'); }
   }));
+
+  // --- ferramenta temporária: corrigir pontuação (ver/remover palpites)
+  const renderFixList = async (uid) => {
+    const box = $('#fixList');
+    box.innerHTML = '<p class="muted">Carregando…</p>';
+    const { predictions } = await api('/admin/user-predictions/' + uid);
+    if (!predictions.length) { box.innerHTML = '<p class="muted">Este participante não tem palpites.</p>'; return; }
+    const total = predictions.reduce((s, p) => s + (p.points || 0), 0);
+    box.innerHTML = `
+      <p style="margin-bottom:8px"><b>Total de pontos: ${total}</b></p>
+      <div class="table-wrap"><table class="rank">
+        <tr><th>Jogo</th><th>Palpite</th><th>Pontos</th><th></th></tr>
+        ${predictions.map(p => `
+          <tr>
+            <td>${esc(p.label)}</td>
+            <td>${p.home_pred} x ${p.away_pred}</td>
+            <td><b>${p.points ?? '–'}</b></td>
+            <td><button class="btn small danger" data-fixdel="${p.match_id}">Remover</button></td>
+          </tr>`).join('')}
+      </table></div>`;
+    box.querySelectorAll('[data-fixdel]').forEach(btn => btn.addEventListener('click', async () => {
+      const p = predictions.find(x => x.match_id === Number(btn.dataset.fixdel));
+      if (!confirm(`Remover o palpite de "${p.label}" (${p.home_pred} x ${p.away_pred}, ${p.points ?? 0} pts)?`)) return;
+      try {
+        await api('/admin/user-prediction', { method: 'DELETE', body: { user_id: Number(uid), match_id: p.match_id } });
+        toast('Palpite removido. Pontuação corrigida.');
+        renderFixList(uid);
+      } catch (err) { toast(esc(err.message), 'err'); }
+    }));
+  };
+  $('#fixLoad')?.addEventListener('click', () => {
+    const uid = $('#fixUser').value;
+    if (!uid) return toast('Selecione um participante.', 'err');
+    renderFixList(uid);
+  });
+
   // --- ações da aba bônus (gabarito)
   app.querySelectorAll('[data-bq]').forEach((f) => f.addEventListener('submit', async (e) => {
     e.preventDefault();

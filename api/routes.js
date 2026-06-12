@@ -180,6 +180,34 @@ router.put('/admin/users/:id', requireAdmin, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// TEMPORÁRIO — correção de pontuação: lista os palpites de um usuário com os
+// pontos de cada um, para o admin localizar e remover um lançamento errado.
+const tName = (name) => teams[name]?.pt || name;
+router.get('/admin/user-predictions/:id', requireAdmin, h(async (req, res) => {
+  const rows = await all(`
+    SELECT p.match_id, p.home_pred, p.away_pred, p.points,
+           m.home_team, m.away_team, m.date_utc, m.status
+      FROM predictions p JOIN matches m ON m.id = p.match_id
+     WHERE p.user_id = $1 ORDER BY m.date_utc ASC, m.id ASC`, [Number(req.params.id)]);
+  res.json({
+    predictions: rows.map((r) => ({
+      match_id: r.match_id, home_pred: r.home_pred, away_pred: r.away_pred,
+      points: r.points, status: r.status,
+      label: `${tName(r.home_team)} x ${tName(r.away_team)}`,
+    })),
+  });
+}));
+
+// TEMPORÁRIO — remove um palpite específico (e seu histórico) e repontua.
+router.delete('/admin/user-prediction', requireAdmin, h(async (req, res) => {
+  const userId = Number(req.body?.user_id), matchId = Number(req.body?.match_id);
+  if (!Number.isInteger(userId) || !Number.isInteger(matchId))
+    return res.status(400).json({ error: 'Informe o usuário e o jogo.' });
+  await run('DELETE FROM predictions WHERE user_id = $1 AND match_id = $2', [userId, matchId]);
+  await run('DELETE FROM score_history WHERE user_id = $1 AND match_id = $2', [userId, matchId]);
+  res.json({ ok: true });
+}));
+
 // O placar NÃO é editável nem pelo admin da plataforma (transparência com os
 // grupos): resultados entram apenas pela sincronização automática (ESPN/API).
 router.put('/admin/matches/:id', requireAdmin, h(async (req, res) => {

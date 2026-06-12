@@ -446,6 +446,14 @@ table.rank td.pos { font-weight: 700; width: 46px; }
 .close-x { background: none; border: none; font-size: 1.15rem; color: var(--muted); padding: 4px 8px; }
 .close-x:hover { color: var(--text); }
 
+/* ------------------------------------------------ ajuda (como funciona) */
+.help-body h4 { font-size: .92rem; margin: 14px 0 4px; }
+.help-body h4:first-child { margin-top: 0; }
+.help-body p { font-size: .86rem; color: var(--text); margin-bottom: 4px; }
+.help-body ul { margin: 4px 0 4px 18px; }
+.help-body li { font-size: .86rem; margin-bottom: 2px; }
+.help-body .muted { font-size: .78rem; }
+
 /* ------------------------------------------------ toasts */
 .toasts { position: fixed; top: 14px; right: 14px; z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: 92vw; }
 
