@@ -967,7 +967,7 @@ async function viewAdmin(tab = 'jogos') {
   }
 
   if (tab === 'usuarios') {
-    const [{ users }, { matches }] = await Promise.all([api('/admin/users'), api('/matches')]);
+    const { users } = await api('/admin/users');
     inner = `
       <div class="card">
         <h3>Adicionar usuário</h3>
@@ -977,28 +977,6 @@ async function viewAdmin(tab = 'jogos') {
           <div class="field"><label>Setor</label><input name="sector"></div>
           <div class="field"><label>Senha</label><input name="password" required></div>
           <button class="btn small" type="submit">Adicionar</button>
-        </form>
-      </div><br>
-      <div class="card">
-        <h3>Lançar palpite por usuário</h3>
-        <p class="muted" style="margin-bottom:10px">
-          Para quem entrou depois do bloqueio: escolha o participante, o jogo (mesmo travado ou encerrado)
-          e o placar. Jogos já encerrados pontuam na hora.
-        </p>
-        <form id="retroPred" class="inline-form">
-          <div class="field"><label>Participante</label>
-            <select name="user_id" required>
-              <option value="">Selecione…</option>
-              ${users.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}
-            </select></div>
-          <div class="field"><label>Jogo</label>
-            <select name="match_id" required>
-              <option value="">Selecione…</option>
-              ${matches.map(m => `<option value="${m.id}">#${m.id} ${esc(m.home_pt)} x ${esc(m.away_pt)} · ${fmtDate(m.date_utc)}${m.status === 'finished' ? ' ✅' : m.locked ? ' 🔒' : ''}</option>`).join('')}
-            </select></div>
-          <div class="field"><label>Casa</label><input name="home" type="number" min="0" max="99" required style="width:80px"></div>
-          <div class="field"><label>Fora</label><input name="away" type="number" min="0" max="99" required style="width:80px"></div>
-          <button class="btn small" type="submit">Salvar palpite</button>
         </form>
       </div><br>
       <div class="card"><div class="table-wrap"><table class="rank">
@@ -1107,17 +1085,6 @@ async function viewAdmin(tab = 'jogos') {
       viewAdmin('usuarios');
     } catch (err) { toast(esc(err.message), 'err'); }
   }));
-  $('#retroPred')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = Object.fromEntries(new FormData(e.target));
-    try {
-      await api('/admin/predictions', { method: 'POST', body: fd });
-      toast('Palpite lançado!');
-      e.target.querySelector('[name=home]').value = '';
-      e.target.querySelector('[name=away]').value = '';
-    } catch (err) { toast(esc(err.message), 'err'); }
-  });
-
   // --- ações da aba bônus (gabarito)
   app.querySelectorAll('[data-bq]').forEach((f) => f.addEventListener('submit', async (e) => {
     e.preventDefault();
