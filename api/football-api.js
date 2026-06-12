@@ -25,9 +25,17 @@ const ALIASES = {
   'south korea': 'korea republic', 'iran': 'ir iran', 'turkey': 'turkiye',
   'ivory coast': 'cote divoire', 'dr congo': 'congo dr', 'czech republic': 'czechia',
   'cape verde islands': 'cabo verde', 'cape verde': 'cabo verde', 'holland': 'netherlands',
+  // nomes da ESPN diferentes dos nossos (já normalizados, sem "and"/pontuação)
+  'united states': 'usa', 'usmnt': 'usa',
+  'republic of ireland': 'ireland', 'uae': 'united arab emirates',
 };
 function normalize(name) {
-  let n = String(name || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  // minúsculo, sem acento; pontuação/hífen viram espaço ("Bosnia-Herzegovina");
+  // a palavra "and" é ignorada (aplicado aos DOIS lados, ESPN e banco)
+  let n = String(name || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\band\b/g, ' ')
+    .replace(/\s+/g, ' ').trim();
   return ALIASES[n] || n;
 }
 async function apiKey() {
