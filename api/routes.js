@@ -10,41 +10,16 @@ const { hashPassword, verifyPassword, createToken, requireAuth, requireAdmin } =
 const { calcPoints, scoreMatch, rescoreAll, getRanking, POINTS } = require('../backend/scoring');
 const { syncResults, syncIfStale } = require('./football-api');
 const { getVapid, saveSubscription, sendPush } = require('./push');
-const teams = require('../database/teams.json');
+
+const { h, isLocked, publicMatch, validScore, lc, rateLimit } = require('./helpers');
 
 const router = express.Router();
-const LOCK_BEFORE_MS = 60 * 60 * 1000; // palpites travam 1h antes
-const PRESENCE_WINDOW = "45 seconds"; // online = visto nos últimos 45s
 
-// envolve handlers async para capturar erros
-const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
-// ------------------------------------------------------------ helpers
-function isLocked(match, now = Date.now()) {
-  if (match.status !== 'scheduled') return true;
-  if (match.lock_mode === 'open') return false;
-  if (match.lock_mode === 'locked') return true;
-  return now >= new Date(match.date_utc).getTime() - LOCK_BEFORE_MS;
-}
-function publicMatch(m) {
-  const t = (name) => teams[name] || null;
-  const iso = m.date_utc instanceof Date ? m.date_utc.toISOString() : m.date_utc;
-  return {
-    ...m, date_utc: iso, locked: isLocked(m),
-    home_pt: t(m.home_team)?.pt || m.home_team,
-    away_pt: t(m.away_team)?.pt || m.away_team,
-    home_flag: t(m.home_team)?.code || null,
-    away_flag: t(m.away_team)?.code || null,
-  };
-}
-function validScore(v) {
-  const n = Number(v);
-  return Number.isInteger(n) && n >= 0 && n <= 99 ? n : null;
-}
-const lc = (s) => String(s || '').trim().toLowerCase();
+// Multi-tenant: grupos, convites e rotas escopadas por grupo
+router.use(require('./groups'));
 
 // ======================================================== AUTENTICAÇÃO
-router.post('/auth/register', h(async (req, res) => {
+router.post('/auth/register', rateLimit(10, 5 * 60_000), h(async (req, res) => {
   const { name, email, password, sector } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Informe nome, e-mail e senha.' });
   if (String(password).length < 6) return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
@@ -62,7 +37,7 @@ router.post('/auth/register', h(async (req, res) => {
   res.json({ token: await createToken(row.id), user, firstUser: isFirst });
 }));
 
-router.post('/auth/login', h(async (req, res) => {
+router.post('/auth/login', rateLimit(15, 5 * 60_000), h(async (req, res) => {
   const { email, password } = req.body || {};
   const user = await get('SELECT * FROM users WHERE email = $1', [lc(email)]);
   if (!user || !verifyPassword(String(password || ''), user.salt, user.password_hash))
@@ -71,7 +46,7 @@ router.post('/auth/login', h(async (req, res) => {
   res.json({ token: await createToken(user.id), user: safe });
 }));
 
-router.post('/auth/forgot', h(async (req, res) => {
+router.post('/auth/forgot', rateLimit(10, 5 * 60_000), h(async (req, res) => {
   const user = await get('SELECT id FROM users WHERE email = $1', [lc(req.body?.email)]);
   if (user) {
     const code = crypto.randomInt(100000, 999999).toString();
@@ -82,7 +57,7 @@ router.post('/auth/forgot', h(async (req, res) => {
   res.json({ message: 'Se o e-mail existir, um código foi gerado. Peça ao administrador do bolão.' });
 }));
 
-router.post('/auth/reset', h(async (req, res) => {
+router.post('/auth/reset', rateLimit(10, 5 * 60_000), h(async (req, res) => {
   const { email, code, password } = req.body || {};
   if (!password || String(password).length < 6) return res.status(400).json({ error: 'A nova senha deve ter pelo menos 6 caracteres.' });
   const user = await get('SELECT * FROM users WHERE email = $1', [lc(email)]);
@@ -121,41 +96,8 @@ router.post('/heartbeat', requireAuth, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
-router.get('/online', requireAuth, h(async (req, res) => {
-  const online = await all(
-    `SELECT u.id, u.name, u.photo, u.sector
-       FROM presence p JOIN users u ON u.id = p.user_id
-      WHERE p.last_seen > now() - interval '${PRESENCE_WINDOW}'
-      ORDER BY u.name`
-  );
-  res.json({ online });
-}));
-
-// ================================================================ CHAT
-// Lista as últimas mensagens; com ?after=ID retorna só as mais novas (polling incremental).
-router.get('/chat', requireAuth, h(async (req, res) => {
-  const after = Number(req.query.after) || 0;
-  const messages = after > 0
-    ? await all(`
-        SELECT c.id, c.text, c.created_at, u.id AS user_id, u.name, u.photo
-          FROM chat_messages c JOIN users u ON u.id = c.user_id
-         WHERE c.id > $1 ORDER BY c.id ASC LIMIT 200`, [after])
-    : (await all(`
-        SELECT c.id, c.text, c.created_at, u.id AS user_id, u.name, u.photo
-          FROM chat_messages c JOIN users u ON u.id = c.user_id
-         ORDER BY c.id DESC LIMIT 50`)).reverse();
-  res.json({ messages });
-}));
-
-router.post('/chat', requireAuth, h(async (req, res) => {
-  const text = String(req.body?.text || '').trim();
-  if (!text) return res.status(400).json({ error: 'Mensagem vazia.' });
-  if (text.length > 500) return res.status(400).json({ error: 'Mensagem muito longa (máx. 500 caracteres).' });
-  const row = await get(
-    'INSERT INTO chat_messages (user_id, text) VALUES ($1, $2) RETURNING id',
-    [req.user.id, text]);
-  res.json({ ok: true, id: row.id });
-}));
+// "Online agora", chat, ranking, dashboard e comparação de palpites são
+// escopados por grupo — vivem em api/groups.js (/api/groups/:gid/...).
 
 // ============================================================== JOGOS
 router.get('/matches', requireAuth, h(async (req, res) => {
@@ -171,25 +113,6 @@ router.get('/matches', requireAuth, h(async (req, res) => {
         : null,
     })),
   });
-}));
-
-router.get('/matches/:id/predictions', requireAuth, h(async (req, res) => {
-  const match = await get('SELECT * FROM matches WHERE id = $1', [Number(req.params.id)]);
-  if (!match) return res.status(404).json({ error: 'Jogo não encontrado.' });
-  const locked = isLocked(match);
-  let predictions = [];
-  if (locked) {
-    predictions = await all(`
-      SELECT p.home_pred, p.away_pred, p.points, u.id AS user_id, u.name, u.photo
-        FROM predictions p JOIN users u ON u.id = p.user_id
-       WHERE p.match_id = $1 ORDER BY p.points DESC NULLS LAST, u.name ASC`, [match.id]);
-  } else {
-    predictions = await all(`
-      SELECT p.home_pred, p.away_pred, p.points, u.id AS user_id, u.name, u.photo
-        FROM predictions p JOIN users u ON u.id = p.user_id
-       WHERE p.match_id = $1 AND p.user_id = $2`, [match.id, req.user.id]);
-  }
-  res.json({ match: publicMatch(match), locked, predictions });
 }));
 
 // ============================================================ PALPITES
@@ -222,35 +145,8 @@ router.post('/push/subscribe', requireAuth, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// ============================================================= RANKING
-router.get('/ranking', requireAuth, h(async (req, res) => {
-  res.json({ ranking: await getRanking(req.query.stage || null), points_table: POINTS });
-}));
-
-// ============================================================ DASHBOARD
-router.get('/dashboard', requireAuth, h(async (req, res) => {
-  syncIfStale(); // dispara sync em background (não bloqueia a resposta)
-  const ranking = await getRanking();
-  const me = ranking.find((r) => r.id === req.user.id) || null;
-
-  const upcoming = (await all(`SELECT * FROM matches WHERE status='scheduled' AND date_utc > now() ORDER BY date_utc ASC LIMIT 6`)).map(publicMatch);
-  const live = (await all(`SELECT * FROM matches WHERE status='live' ORDER BY date_utc ASC`)).map(publicMatch);
-  const recent = (await all(`SELECT * FROM matches WHERE status='finished' ORDER BY date_utc DESC LIMIT 6`)).map(publicMatch);
-
-  const history = await all(`
-    SELECT h.points, m.date_utc, m.home_team, m.away_team
-      FROM score_history h JOIN matches m ON m.id = h.match_id
-     WHERE h.user_id = $1 ORDER BY m.date_utc ASC`, [req.user.id]);
-  let acc = 0;
-  const evolution = history.map((x) => ({
-    date: x.date_utc instanceof Date ? x.date_utc.toISOString() : x.date_utc,
-    label: `${x.home_team} x ${x.away_team}`, points: x.points, total: (acc += x.points),
-  }));
-
-  res.json({ me, top10: ranking.slice(0, 10), upcoming, live, recent, evolution, total_users: ranking.length });
-}));
-
-// =============================================================== ADMIN
+// ==================================================== ADMIN DA PLATAFORMA
+// (users.is_admin = dono da plataforma; admin de grupo vive em group_members)
 router.get('/admin/users', requireAdmin, h(async (req, res) => {
   const users = await all(`
     SELECT id, name, email, sector, is_admin, created_at, reset_token, reset_expires,
@@ -333,7 +229,7 @@ router.put('/admin/settings', requireAdmin, h(async (req, res) => {
 router.post('/admin/push-test', requireAdmin, h(async (req, res) => {
   const { title, body, everyone } = req.body || {};
   const payload = {
-    title: String(title || '').trim() || '🔔 Bolão Copa 2026',
+    title: String(title || '').trim() || '🔔 palpitei',
     body: String(body || '').trim() || 'Teste: as notificações estão funcionando!',
     url: '/#/dashboard',
     tag: 'aviso-' + Date.now(),

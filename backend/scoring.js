@@ -48,14 +48,12 @@ async function scoreMatch(matchId) {
   if (gained.length) {
     try {
       const { sendPush } = require('../api/push');
-      const ranking = await getRanking();
-      const pos = new Map(ranking.map((r) => [r.id, r.position]));
       const t = (name) => teams[name]?.pt || name;
       const placar = `${t(match.home_team)} ${match.home_score} x ${match.away_score} ${t(match.away_team)}`;
       for (const g of gained) {
         await sendPush(g.user_id, {
           title: `⚽ Você ganhou +${g.delta} ponto${g.delta > 1 ? 's' : ''}!`,
-          body: `${placar} — você está em ${pos.get(g.user_id)}º lugar no ranking.`,
+          body: `${placar} — confira sua posição nos seus grupos.`,
           url: '/#/dashboard',
           tag: 'jogo-' + match.id,
         });
@@ -77,12 +75,23 @@ async function rescoreAll() {
 
 const VALID_STAGES = ['grupos', 'r32', 'oitavas', 'quartas', 'semis', 'final'];
 
-/** Ranking geral (ou por fase). */
-async function getRanking(stage = null) {
+/**
+ * Ranking geral ou por fase. Com groupId, considera só os membros do grupo
+ * (o palpite é único por usuário; o que muda entre grupos é quem concorre).
+ */
+async function getRanking(stage = null, groupId = null) {
   if (stage && !VALID_STAGES.includes(stage)) stage = null;
-  const predSql = stage
-    ? `SELECT p.* FROM predictions p JOIN matches m ON m.id = p.match_id WHERE m.stage = $1`
-    : `SELECT * FROM predictions`;
+  const params = [];
+  let predSql = 'SELECT * FROM predictions';
+  if (stage) {
+    params.push(stage);
+    predSql = `SELECT p.* FROM predictions p JOIN matches m ON m.id = p.match_id WHERE m.stage = $${params.length}`;
+  }
+  let memberJoin = '';
+  if (groupId) {
+    params.push(groupId);
+    memberJoin = `JOIN group_members gm ON gm.user_id = u.id AND gm.group_id = $${params.length}`;
+  }
   const rows = await all(`
     SELECT u.id, u.name, u.photo, u.sector,
            COALESCE(SUM(p.points),0)::int                          AS total_points,
@@ -90,10 +99,11 @@ async function getRanking(stage = null) {
            COUNT(p.id)::int                                        AS total_predictions,
            COALESCE(SUM(CASE WHEN p.points > 0 THEN 1 END),0)::int  AS scoring_hits
     FROM users u
+    ${memberJoin}
     LEFT JOIN (${predSql}) p ON p.user_id = u.id
     GROUP BY u.id
     ORDER BY total_points DESC, exact_hits DESC, scoring_hits DESC, u.name ASC
-  `, stage ? [stage] : []);
+  `, params);
   return rows.map((r, i) => ({ ...r, position: i + 1 }));
 }
 

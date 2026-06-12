@@ -97,6 +97,59 @@ body:has(#topbar[hidden]) { padding-top: 0; } /* tela de login não tem topbar *
 .nav a:hover { color: var(--text); background: var(--bg); }
 .nav a.active { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 .topbar-actions { display: flex; gap: 6px; }
+
+/* chip do grupo ativo (troca de grupo) */
+.group-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid transparent; border-radius: 999px;
+  padding: 6px 12px; font-size: .8rem; font-weight: 600;
+  max-width: 180px;
+}
+.group-chip span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-chip .caret { font-size: .6rem; opacity: .7; }
+.group-chip:hover { border-color: var(--accent); }
+
+/* lista de grupos (seletor e bem-vindo) */
+.group-list { display: flex; flex-direction: column; gap: 8px; }
+.group-item {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 11px;
+  padding: 10px 12px; text-align: left; transition: border-color .15s;
+}
+.group-item:hover { border-color: var(--accent); }
+.group-item.active { border-color: var(--accent); background: var(--accent-soft); }
+.group-item .gi-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.group-item .gi-info b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-item .sec { font-size: .74rem; color: var(--muted); }
+
+/* tela de boas-vindas */
+.welcome { padding-top: 4vh; }
+.welcome-card { display: block; text-align: center; transition: transform .15s, border-color .15s; }
+.welcome-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.welcome-card .wc-emoji { font-size: 2rem; margin-bottom: 8px; }
+.welcome-card b { display: block; margin-bottom: 6px; font-size: 1.02rem; }
+
+/* paleta de cores do grupo (estilo Paint) */
+.color-grid { display: flex; flex-wrap: wrap; gap: 7px; padding: 2px 0; }
+.swatch {
+  width: 32px; height: 32px; border-radius: 9px;
+  border: 2px solid var(--border); cursor: pointer;
+  transition: transform .1s, border-color .1s, box-shadow .1s;
+}
+.swatch:hover { transform: scale(1.12); }
+.swatch.sel {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--text);
+  transform: scale(1.08);
+}
+
+/* caixa do link de convite */
+.invite-box {
+  background: var(--bg); border: 1px dashed var(--border); border-radius: 9px;
+  padding: 10px 12px; overflow-wrap: anywhere;
+}
+.invite-box code { font-size: .82rem; color: var(--accent); }
 .icon-btn {
   background: transparent; border: 1px solid var(--border); color: var(--muted);
   width: 36px; height: 36px; border-radius: 9px; font-size: .95rem;
@@ -108,8 +161,10 @@ body:has(#topbar[hidden]) { padding-top: 0; } /* tela de login não tem topbar *
 /* Em telas pequenas a navegação vira barra fixa inferior */
 @media (max-width: 680px) {
   /* a nav vira fixa (sai do fluxo): separa a marca das ações nos cantos */
-  .topbar-inner { padding: 10px 14px; gap: 10px; justify-content: space-between; }
+  .topbar-inner { padding: 10px 14px; gap: 8px; justify-content: space-between; }
   .brand { font-size: .96rem; }
+  .brand > span:last-child { display: none; } /* só o ícone ⚽; o chip do grupo ocupa o espaço */
+  .group-chip { max-width: 46vw; font-size: .74rem; padding: 6px 10px; }
   .nav {
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
     background: var(--card); border-top: 1px solid var(--border);

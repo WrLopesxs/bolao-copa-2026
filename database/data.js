@@ -116,6 +116,42 @@ CREATE TABLE IF NOT EXISTS presence (
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- competições (Copa 2026 é a nº 1; Brasileirão, Champions etc. no futuro)
+CREATE TABLE IF NOT EXISTS competitions (
+  id     SERIAL PRIMARY KEY,
+  name   TEXT NOT NULL,
+  slug   TEXT UNIQUE NOT NULL,
+  status TEXT DEFAULT 'active'        -- upcoming | active | finished
+);
+
+-- grupos de bolão (multi-tenant): cada grupo é um bolão independente
+CREATE TABLE IF NOT EXISTS groups (
+  id              SERIAL PRIMARY KEY,
+  name            TEXT NOT NULL,
+  slug            TEXT UNIQUE NOT NULL,
+  description     TEXT DEFAULT '',
+  logo            TEXT DEFAULT '',     -- data-URL, como a foto de perfil
+  banner          TEXT DEFAULT '',
+  color_primary   TEXT DEFAULT '',
+  color_secondary TEXT DEFAULT '',
+  invite_code     TEXT UNIQUE NOT NULL,
+  competition_id  INTEGER NOT NULL DEFAULT 1,
+  plan            TEXT DEFAULT 'free', -- free | premium
+  max_members     INTEGER DEFAULT 10,  -- NULL = ilimitado
+  creator_id      INTEGER NOT NULL REFERENCES users(id),
+  is_suspended    INTEGER DEFAULT 0,
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+-- participação: um usuário pode estar em vários grupos
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id  INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role      TEXT NOT NULL DEFAULT 'member',  -- owner | admin | member
+  joined_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (group_id, user_id)
+);
+
 -- assinaturas de notificação push (um aparelho = uma linha)
 CREATE TABLE IF NOT EXISTS push_subs (
   endpoint   TEXT PRIMARY KEY,
@@ -133,10 +169,65 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- colunas novas em tabelas antigas (no-op quando já existem;
+-- precisa vir depois dos CREATEs, que rodam na ordem do arquivo)
+ALTER TABLE matches       ADD COLUMN IF NOT EXISTS competition_id INTEGER;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS group_id INTEGER;
+
 CREATE INDEX IF NOT EXISTS idx_pred_match ON predictions(match_id);
 CREATE INDEX IF NOT EXISTS idx_pred_user  ON predictions(user_id);
 CREATE INDEX IF NOT EXISTS idx_chat_id    ON chat_messages(id DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_group ON chat_messages(group_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_gm_user    ON group_members(user_id);
 `;
+
+/** Código de convite curto, sem caracteres ambíguos (0/O, 1/I/L). */
+function genInviteCode(len = 6) {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  return Array.from(crypto.randomBytes(len)).map((b) => chars[b % chars.length]).join('');
+}
+
+/**
+ * Migração multi-tenant (idempotente, roda a cada cold start):
+ * aponta os jogos para a competição 1 e, se o banco é de antes dos grupos
+ * (tem usuários mas nenhum grupo), transforma o bolão existente no grupo #1
+ * sem tocar em palpites nem pontos.
+ */
+async function migrateToGroups() {
+  await run(`INSERT INTO competitions (id, name, slug, status)
+             VALUES (1, 'Copa do Mundo 2026', 'copa-2026', 'active')
+             ON CONFLICT (id) DO NOTHING`);
+  await run(`SELECT setval('competitions_id_seq', (SELECT MAX(id) FROM competitions))`);
+  await run(`UPDATE matches SET competition_id = 1 WHERE competition_id IS NULL`);
+
+  // roda UMA vez na vida do banco (flag em settings): sem ela, um restart
+  // futuro jogaria usuários novos sem grupo num grupo automático
+  const migrated = await getSetting('groups_migrated');
+  const hasGroups = (await get('SELECT COUNT(*)::int AS c FROM groups')).c > 0;
+  const users = await all('SELECT id, is_admin FROM users ORDER BY id');
+  if (!migrated && !hasGroups && users.length) {
+    const owner = users.find((u) => u.is_admin) || users[0];
+    await run(
+      `INSERT INTO groups (id, name, slug, invite_code, competition_id, creator_id, plan, max_members)
+       VALUES (1, 'Bolão Copa 2026', 'bolao-copa-2026', $1, 1, $2, 'premium', NULL)
+       ON CONFLICT (id) DO NOTHING`,
+      [genInviteCode(), owner.id]
+    );
+    for (const u of users) {
+      await run(
+        `INSERT INTO group_members (group_id, user_id, role) VALUES (1, $1, $2)
+         ON CONFLICT (group_id, user_id) DO NOTHING`,
+        [u.id, u.id === owner.id ? 'owner' : (u.is_admin ? 'admin' : 'member')]
+      );
+    }
+    console.log(`[migração] Bolão existente virou o grupo #1 com ${users.length} membro(s).`);
+  }
+  if (!migrated) await setSetting('groups_migrated', '1');
+  // alinha a sequência sem "queimar" o id 1 em bancos novos (is_called=false → próximo id é o próprio valor)
+  await run(`SELECT setval('groups_id_seq', GREATEST((SELECT COALESCE(MAX(id),0) FROM groups), 1),
+                    EXISTS(SELECT 1 FROM groups))`);
+  await run(`UPDATE chat_messages SET group_id = 1 WHERE group_id IS NULL`);
+}
 
 // Garante schema + jogos carregados. Memoizado (roda uma vez por processo).
 let readyPromise = null;
@@ -147,6 +238,7 @@ function ensureReady() {
     if (!row || row.c === 0) {
       await seedMatches();
     }
+    await migrateToGroups();
   })().catch((e) => { readyPromise = null; throw e; });
   return readyPromise;
 }
@@ -194,4 +286,4 @@ async function getSecret() {
   return s;
 }
 
-module.exports = { query, get, all, run, exec, ensureReady, seedMatches, getSetting, setSetting, getSecret };
+module.exports = { query, get, all, run, exec, ensureReady, seedMatches, getSetting, setSetting, getSecret, genInviteCode };

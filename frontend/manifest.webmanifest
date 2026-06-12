@@ -1,7 +1,7 @@
 {
-  "name": "Bolão Copa 2026",
-  "short_name": "Bolão",
-  "description": "Bolão da Copa do Mundo 2026 — palpites, ranking e notificações",
+  "name": "palpitei — bolão com os amigos",
+  "short_name": "palpitei",
+  "description": "Crie seu bolão, convide os amigos e dispute o ranking — Copa 2026 e mais",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f6f7f7",

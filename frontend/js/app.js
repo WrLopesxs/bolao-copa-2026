@@ -1,5 +1,5 @@
 /* ============================================================
-   Bolão Copa 2026 — aplicação frontend (SPA em JS puro)
+   palpitei — bolão com os amigos (SPA em JS puro)
    ============================================================ */
 'use strict';
 
@@ -7,6 +7,9 @@
 const state = {
   token: localStorage.getItem('token') || null,
   user: null,
+  groups: [],          // grupos que participo
+  group: null,         // grupo ativo
+  groupsLoaded: false,
   matches: [],
   filter: 'todos',     // filtro da tela de jogos
   stage: '',           // filtro do ranking por fase
@@ -35,6 +38,109 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error(data.error || 'Erro na requisição');
   return data;
 }
+// Chamada escopada no grupo ativo (/api/groups/:id/...)
+const gapi = (path, opts) => api(`/groups/${state.group.id}${path}`, opts);
+
+// ------------------------------------------------------------ grupos
+/** Carrega meus grupos e restaura (ou escolhe) o grupo ativo. */
+async function loadGroups() {
+  const d = await api('/groups');
+  state.groups = d.groups;
+  const savedId = Number(localStorage.getItem('activeGroupId'));
+  state.group = state.groups.find((g) => g.id === savedId) || state.groups[0] || null;
+  if (state.group) localStorage.setItem('activeGroupId', state.group.id);
+  else localStorage.removeItem('activeGroupId');
+  state.groupsLoaded = true;
+  applyGroupTheme();
+  updateGroupChip();
+}
+
+function setActiveGroup(g) {
+  state.group = g;
+  localStorage.setItem('activeGroupId', g.id);
+  state.lastPoints = null; // evita toast falso de pontos ao trocar de grupo
+  applyGroupTheme();
+  updateGroupChip();
+}
+
+/** Cores do grupo viram o tema do app (volta ao padrão se o grupo não tiver). */
+function applyGroupTheme() {
+  const r = document.documentElement.style;
+  const g = state.group;
+  if (g?.color_primary) {
+    r.setProperty('--accent', g.color_primary);
+    r.setProperty('--accent-strong', g.color_primary);
+    r.setProperty('--accent-soft', g.color_primary + '22');
+  } else { r.removeProperty('--accent'); r.removeProperty('--accent-strong'); r.removeProperty('--accent-soft'); }
+  if (g?.color_secondary) r.setProperty('--gold', g.color_secondary);
+  else r.removeProperty('--gold');
+}
+
+function updateGroupChip() {
+  const chip = $('#groupChip');
+  chip.hidden = !state.group;
+  if (state.group) $('#groupChipName').textContent = state.group.name;
+}
+
+// Paleta de cores do grupo (estilo Paint: clica e pronto)
+const GROUP_COLORS = ['#117a4b', '#16a34a', '#0d9488', '#1d4ed8', '#0284c7', '#7c3aed', '#db2777', '#cc0000', '#ea580c', '#ca8a04', '#475569', '#111827'];
+const ACCENT_COLORS = ['#e0a528', '#f59e0b', '#facc15', '#fb923c', '#f87171', '#f472b6', '#a78bfa', '#60a5fa', '#34d399', '#a3e635', '#94a3b8', '#e5e7eb'];
+
+function colorPicker(name, value, colors) {
+  return `<div class="color-grid">
+    ${colors.map((c) => `<button type="button" class="swatch ${c.toLowerCase() === String(value).toLowerCase() ? 'sel' : ''}" style="background:${c}" data-c="${c}" title="${c}"></button>`).join('')}
+    <input type="hidden" name="${name}" value="${value}">
+  </div>`;
+}
+function bindColorPickers(root = app) {
+  root.querySelectorAll('.color-grid').forEach((grid) => {
+    grid.addEventListener('click', (e) => {
+      const b = e.target.closest('.swatch');
+      if (!b) return;
+      grid.querySelectorAll('.swatch').forEach((s) => s.classList.remove('sel'));
+      b.classList.add('sel');
+      grid.querySelector('input[type=hidden]').value = b.dataset.c;
+    });
+  });
+}
+
+/** Logo do grupo (imagem) ou bolinha com a inicial. */
+function groupLogo(g, size = 34) {
+  if (g.logo) return `<img class="avatar" style="border-radius:9px;width:${size}px;height:${size}px" src="${g.logo}" alt="">`;
+  return `<span class="avatar" style="border-radius:9px;width:${size}px;height:${size}px;background:${g.color_primary || 'var(--accent-soft)'};color:#fff">${esc((g.name || '?')[0].toUpperCase())}</span>`;
+}
+
+/** Modal de troca de grupo (clicando no nome do grupo na barra). */
+function groupSwitcherModal() {
+  openModal(`
+    <div class="modal-head">
+      <h3>Meus grupos</h3>
+      <button class="close-x" onclick="document.getElementById('modal').hidden=true">✕</button>
+    </div>
+    <div class="group-list">
+      ${state.groups.map((g) => `
+        <button class="group-item ${g.id === state.group?.id ? 'active' : ''}" data-gsel="${g.id}">
+          ${groupLogo(g)}
+          <span class="gi-info"><b>${esc(g.name)}</b>
+          <span class="sec">${g.member_count} participante${g.member_count > 1 ? 's' : ''} · ${g.my_role === 'owner' ? 'dono' : g.my_role === 'admin' ? 'admin' : 'membro'}</span></span>
+          ${g.id === state.group?.id ? '<span class="tag">atual</span>' : ''}
+        </button>`).join('')}
+    </div>
+    <div class="row-actions" style="margin-top:14px">
+      <button class="btn small ghost" id="gsNew">➕ Criar grupo</button>
+      <button class="btn small ghost" id="gsJoin">🎟️ Entrar com código</button>
+      <button class="btn small" id="gsManage">⚙️ Ver grupo atual</button>
+    </div>`);
+  document.querySelectorAll('[data-gsel]').forEach((b) => b.addEventListener('click', () => {
+    const g = state.groups.find((x) => x.id === Number(b.dataset.gsel));
+    if (g && g.id !== state.group?.id) { setActiveGroup(g); toast(`Agora você está no <b>${esc(g.name)}</b>.`); }
+    closeModal(); route();
+  }));
+  $('#gsNew').addEventListener('click', () => { closeModal(); location.hash = '#/novogrupo'; });
+  $('#gsJoin').addEventListener('click', () => { closeModal(); location.hash = '#/entrar'; });
+  $('#gsManage').addEventListener('click', () => { closeModal(); location.hash = '#/grupo'; });
+}
+$('#groupChip').addEventListener('click', groupSwitcherModal);
 
 // ------------------------------------------------------------ utils
 function esc(s) {
@@ -67,6 +173,11 @@ function openModal(html) {
   $('#modal').hidden = false;
 }
 function closeModal() { $('#modal').hidden = true; }
+
+// Clique no link da CazéTV não pode abrir o modal de comparação do card
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.watch-live a')) e.stopPropagation();
+}, true);
 
 // Clicar em qualquer foto de avatar (ranking, comparação, online) amplia no lightbox.
 document.addEventListener('click', (e) => {
@@ -188,7 +299,7 @@ function pushInstallModal() {
     <p class="muted" style="margin-bottom:12px">No iPhone, notificações só funcionam com o site instalado como app:</p>
     <p style="margin-bottom:8px">1. Toque em <b>Compartilhar</b> (quadrado com seta ↑) na barra do Safari.</p>
     <p style="margin-bottom:8px">2. Escolha <b>Adicionar à Tela de Início</b>.</p>
-    <p style="margin-bottom:16px">3. Abra o <b>Bolão</b> pelo novo ícone e ative as notificações no Perfil.</p>
+    <p style="margin-bottom:16px">3. Abra o <b>palpitei</b> pelo novo ícone e ative as notificações no Perfil.</p>
     <button class="btn ghost" onclick="document.getElementById('modal').hidden=true">Entendi</button>`);
 }
 
@@ -221,9 +332,9 @@ function offerPush() {
 /** Atualiza o card "online agora" se ele estiver na tela. */
 async function refreshOnline() {
   const box = $('#onlineList');
-  if (!box) return;
+  if (!box || !state.group) return;
   try {
-    const { online } = await api('/online');
+    const { online } = await gapi('/online');
     $('#onlineCount').textContent = online.length;
     box.innerHTML = online.map(u => `
       <div class="online-item">
@@ -237,8 +348,12 @@ async function refreshOnline() {
 // ------------------------------------------------------------ sessão
 function logout() {
   state.token = null; state.user = null;
+  state.groups = []; state.group = null; state.groupsLoaded = false;
   localStorage.removeItem('token');
+  localStorage.removeItem('activeGroupId');
   stopRealtime();
+  applyGroupTheme();
+  updateGroupChip();
   location.hash = '#/login';
 }
 $('#logoutBtn').addEventListener('click', logout);
@@ -248,11 +363,12 @@ $('#logoutBtn').addEventListener('click', logout);
 // ---------- LOGIN / CADASTRO / RECUPERAÇÃO ----------
 function viewAuth(mode) {
   $('#topbar').hidden = true;
+  const invited = localStorage.getItem('pendingInvite');
   const forms = {
     login: `
       <div class="logo">⚽</div>
-      <h1>Bolão Copa 2026</h1>
-      <p class="sub">Entre para dar seus palpites</p>
+      <h1>palpit<b style="color:var(--accent)">ei</b></h1>
+      ${invited ? '<p class="sub">🎟️ Você recebeu um convite! Entre ou crie sua conta para participar do grupo.</p>' : '<p class="sub">Entre para dar seus palpites</p>'}
       <form id="f">
         <div class="field"><label>E-mail</label><input name="email" type="email" required autocomplete="email"></div>
         <div class="field"><label>Senha</label><input name="password" type="password" required autocomplete="current-password"></div>
@@ -264,11 +380,11 @@ function viewAuth(mode) {
     cadastro: `
       <div class="logo">⚽</div>
       <h1>Criar conta</h1>
-      <p class="sub">O primeiro usuário cadastrado vira administrador</p>
+      <p class="sub">${invited ? '🎟️ Crie sua conta para entrar no grupo que te convidou' : 'Crie sua conta, monte seu grupo e convide os amigos'}</p>
       <form id="f">
         <div class="field"><label>Nome completo</label><input name="name" required></div>
         <div class="field"><label>E-mail</label><input name="email" type="email" required></div>
-        <div class="field"><label>Setor</label><input name="sector" placeholder="Ex.: TI, RH, Financeiro"></div>
+        <div class="field"><label>Time/setor (opcional)</label><input name="sector" placeholder="Ex.: TI, Família, Galera do futebol"></div>
         <div class="field"><label>Senha (mín. 6 caracteres)</label><input name="password" type="password" minlength="6" required></div>
         <button class="btn" type="submit">Cadastrar</button>
       </form>
@@ -302,10 +418,21 @@ function viewAuth(mode) {
         const data = await api(mode === 'login' ? '/auth/login' : '/auth/register', { method: 'POST', body });
         state.token = data.token; state.user = data.user;
         localStorage.setItem('token', data.token);
-        if (data.firstUser) toast('Você é o primeiro usuário e virou <b>administrador</b>.', 'gold');
+        if (data.firstUser) toast('Você é o primeiro usuário e virou <b>administrador da plataforma</b>.', 'gold');
+        // convite pendente: entra no grupo automaticamente
+        const code = localStorage.getItem('pendingInvite');
+        if (code) {
+          localStorage.removeItem('pendingInvite');
+          try {
+            const j = await api(`/invite/${code}/join`, { method: 'POST' });
+            toast(`🎉 Você entrou no grupo <b>${esc(j.group.name)}</b>!`, 'gold');
+            localStorage.setItem('activeGroupId', j.group.id);
+          } catch (err) { toast(esc(err.message), 'err'); }
+        }
+        await loadGroups();
         offerPush(); // convite para ativar notificações logo após o login
         connectWS();
-        location.hash = '#/dashboard';
+        location.hash = state.group ? '#/dashboard' : '#/bemvindo';
       } catch (err) { toast(esc(err.message), 'err'); btn.disabled = false; }
     });
   }
@@ -330,7 +457,7 @@ function viewAuth(mode) {
 
 // ---------- DASHBOARD ----------
 async function viewDashboard() {
-  const d = await api('/dashboard');
+  const d = await gapi('/dashboard');
   const me = d.me || { position: '-', total_points: 0, exact_hits: 0, total_predictions: 0 };
 
   // Notifica ganho de pontos comparando com o valor anterior (substitui o evento WS)
@@ -351,11 +478,12 @@ async function viewDashboard() {
         <div class="score-final">${m.home_score ?? '–'} x ${m.away_score ?? '–'}</div>
         <div class="team">${flag(m.away_flag, m.away_pt)}<span class="name">${esc(m.away_pt)}</span></div>
       </div>
+      ${m.status === 'live' ? '<div class="watch-live"><a href="https://www.youtube.com/@CazeTV/live" target="_blank" rel="noopener">📺 Assistir na CazéTV</a></div>' : ''}
     </div>`;
 
   app.innerHTML = `
     <h2 class="page-title">Olá, ${esc(state.user.name.split(' ')[0])}</h2>
-    <p class="page-sub">Acompanhe sua campanha no bolão</p>
+    <p class="page-sub">Sua campanha no <b>${esc(state.group.name)}</b> · <a href="#/grupo" style="color:var(--accent);font-weight:600">ver grupo</a></p>
     <div class="stat-row">
       <div class="stat hero"><div class="num">${me.position && d.total_users ? medal(me.position) : '–'}</div><div class="lbl">Posição</div></div>
       <div class="stat"><div class="num">${me.total_points}</div><div class="lbl">Pontos</div></div>
@@ -371,7 +499,7 @@ async function viewDashboard() {
         <br><a class="btn ghost" href="#/jogos">Dar palpites</a>
       </div>
       <div class="card">
-        <h3>Top 10 do bolão</h3>
+        <h3>Top 10 do grupo</h3>
         <div class="table-wrap"><table class="rank">
           <tr><th></th><th>Nome</th><th>Pts</th><th>Exatos</th></tr>
           ${d.top10.map(r => `
@@ -641,7 +769,7 @@ function bindCompare() {
 }
 async function showCompare(matchId) {
   try {
-    const d = await api(`/matches/${matchId}/predictions`);
+    const d = await gapi(`/matches/${matchId}/predictions`);
     const m = d.match;
     openModal(`
       <div class="modal-head">
@@ -670,10 +798,10 @@ async function showCompare(matchId) {
 // ---------- RANKING ----------
 async function viewRanking() {
   const stage = state.stage;
-  const d = await api('/ranking' + (stage ? '?stage=' + stage : ''));
+  const d = await gapi('/ranking' + (stage ? '?stage=' + stage : ''));
   app.innerHTML = `
     <h2 class="page-title">Ranking ${stage ? '— ' + STAGES[stage] : 'geral'}</h2>
-    <p class="page-sub">Atualizado em tempo real conforme os jogos terminam</p>
+    <p class="page-sub">${esc(state.group.name)} · atualizado em tempo real conforme os jogos terminam</p>
     <div class="filters">
       <button class="chip ${!stage ? 'active' : ''}" data-s="">Geral</button>
       ${Object.entries(STAGES).map(([k, v]) =>
@@ -724,7 +852,8 @@ async function viewPerfil() {
         <h3>Informações</h3>
         <p><b>E-mail:</b> ${esc(user.email)}</p>
         <p><b>Cadastro:</b> ${new Date(user.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('pt-BR')}</p>
-        <p><b>Tipo:</b> ${user.is_admin ? 'Administrador' : 'Participante'}</p>
+        <p><b>Tipo:</b> ${user.is_admin ? 'Administrador da plataforma' : 'Participante'}</p>
+        <p><b>Meus grupos:</b> ${state.groups.length}</p>
         <br>
         <h3>🔔 Notificações</h3>
         <p class="muted" style="margin-bottom:10px">
@@ -888,8 +1017,8 @@ async function viewAdmin(tab = 'jogos') {
   }
 
   app.innerHTML = `
-    <h2 class="page-title">Painel administrativo</h2>
-    <p class="page-sub">Gerencie usuários, jogos e configurações do bolão</p>
+    <h2 class="page-title">Painel da plataforma</h2>
+    <p class="page-sub">Jogos, resultados e usuários de TODOS os grupos (só você vê isso)</p>
     <div class="admin-tabs">${tabs.map(([k, v]) =>
       `<button class="chip ${tab === k ? 'active' : ''}" data-tab="${k}">${v}</button>`).join('')}</div>
     ${inner}`;
@@ -1052,8 +1181,8 @@ function chatMsgHTML(m) {
 
 async function viewChat() {
   app.innerHTML = `
-    <h2 class="page-title">Chat do bolão</h2>
-    <p class="page-sub">Converse com os participantes — todos veem as mensagens</p>
+    <h2 class="page-title">Chat do grupo</h2>
+    <p class="page-sub">${esc(state.group.name)} — só os participantes do grupo veem as mensagens</p>
     <div class="card chat-card">
       <div class="chat-list" id="chatList"><p class="muted chat-empty">Carregando…</p></div>
       <div class="chat-emojis" id="chatEmojis">${CHAT_EMOJIS.map(e => `<button type="button">${e}</button>`).join('')}</div>
@@ -1069,7 +1198,7 @@ async function viewChat() {
 
   const load = async () => {
     try {
-      const d = await api(`/chat${chatLastId ? `?after=${chatLastId}` : ''}`);
+      const d = await gapi(`/chat${chatLastId ? `?after=${chatLastId}` : ''}`);
       if (firstLoad) list.innerHTML = '';
       if (d.messages.length) {
         list.querySelector('.chat-empty')?.remove();
@@ -1107,10 +1236,289 @@ async function viewChat() {
     if (!text) return;
     input.value = '';
     try {
-      await api('/chat', { method: 'POST', body: { text } });
+      await gapi('/chat', { method: 'POST', body: { text } });
       await load();
     } catch (err) { toast(esc(err.message), 'err'); input.value = text; }
     input.focus();
+  });
+}
+
+// ---------- BEM-VINDO (sem grupo ainda) ----------
+function viewBemvindo() {
+  app.innerHTML = `
+    <div class="welcome">
+      <div class="logo" style="width:56px;height:56px;border-radius:16px;background:var(--accent);color:#fff;font-size:1.6rem;display:flex;align-items:center;justify-content:center;margin:0 auto 14px">⚽</div>
+      <h2 class="page-title" style="text-align:center">Bem-vindo ao palpitei, ${esc(state.user.name.split(' ')[0])}!</h2>
+      <p class="page-sub" style="text-align:center">Para começar, crie seu grupo de bolão ou entre num grupo existente.</p>
+      <div class="grid cols-2" style="max-width:640px;margin:0 auto">
+        <a class="card welcome-card" href="#/novogrupo">
+          <div class="wc-emoji">➕</div>
+          <b>Criar meu grupo</b>
+          <p class="muted">Monte o bolão da firma, da família ou dos amigos e convide todo mundo.</p>
+        </a>
+        <a class="card welcome-card" href="#/entrar">
+          <div class="wc-emoji">🎟️</div>
+          <b>Entrar com código</b>
+          <p class="muted">Recebeu um código ou link de convite? Entre no grupo por aqui.</p>
+        </a>
+      </div>
+      ${state.groups.length ? `
+        <br><h3 style="text-align:center;color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.07em">Meus grupos</h3>
+        <div class="group-list" style="max-width:640px;margin:10px auto 0">
+          ${state.groups.map((g) => `
+            <button class="group-item" data-gsel="${g.id}">
+              ${groupLogo(g)}
+              <span class="gi-info"><b>${esc(g.name)}</b>
+              <span class="sec">${g.member_count} participante${g.member_count > 1 ? 's' : ''}</span></span>
+            </button>`).join('')}
+        </div>` : ''}
+    </div>`;
+  app.querySelectorAll('[data-gsel]').forEach((b) => b.addEventListener('click', () => {
+    setActiveGroup(state.groups.find((x) => x.id === Number(b.dataset.gsel)));
+    location.hash = '#/dashboard';
+  }));
+}
+
+// ---------- CRIAR GRUPO ----------
+function viewNovoGrupo() {
+  app.innerHTML = `
+    <h2 class="page-title">Criar grupo</h2>
+    <p class="page-sub">Seu bolão, suas regras: dê um nome e personalize as cores</p>
+    <div class="card" style="max-width:520px">
+      <form id="ng">
+        <div class="field"><label>Nome do grupo</label><input name="name" required minlength="3" maxlength="60" placeholder="Ex.: Bolão Prensas Toyota"></div>
+        <div class="field"><label>Descrição (opcional)</label><input name="description" maxlength="300" placeholder="Ex.: bolão oficial do setor 😎"></div>
+        <div class="field"><label>Cor principal</label>${colorPicker('color_primary', '#117a4b', GROUP_COLORS)}</div>
+        <div class="field"><label>Cor de destaque</label>${colorPicker('color_secondary', '#e0a528', ACCENT_COLORS)}</div>
+        <button class="btn" type="submit">Criar grupo</button>
+      </form>
+    </div>`;
+  bindColorPickers();
+  $('#ng').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button'); btn.disabled = true;
+    try {
+      const d = await api('/groups', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+      await loadGroups();
+      setActiveGroup(state.groups.find((g) => g.id === d.group.id) || d.group);
+      inviteModal(d.group, true);
+    } catch (err) { toast(esc(err.message), 'err'); btn.disabled = false; }
+  });
+}
+
+/** Modal com código e link de convite prontos para compartilhar. */
+function inviteModal(group, isNew = false) {
+  const link = `${location.origin}/#/invite/${group.invite_code}`;
+  openModal(`
+    <div class="modal-head">
+      <h3>${isNew ? '🎉 Grupo criado!' : '🎟️ Convidar participantes'}</h3>
+      <button class="close-x" onclick="document.getElementById('modal').hidden=true">✕</button>
+    </div>
+    <p class="muted" style="margin-bottom:12px">Compartilhe o link no WhatsApp do pessoal — quem abrir já cai direto no <b>${esc(group.name)}</b>:</p>
+    <div class="invite-box"><code>${esc(link)}</code></div>
+    <div class="row-actions" style="margin:12px 0">
+      <button class="btn small" id="copyLink">📋 Copiar link</button>
+      <button class="btn small ghost" id="copyCode">Copiar só o código (${esc(group.invite_code)})</button>
+    </div>
+    ${isNew ? '<button class="btn gold" id="goDash" style="width:100%">Ir para o meu bolão →</button>' : ''}`);
+  const copy = async (text, btn, label) => {
+    try { await navigator.clipboard.writeText(text); btn.textContent = '✅ Copiado!'; }
+    catch { prompt('Copie manualmente:', text); }
+    setTimeout(() => { btn.textContent = label; }, 2000);
+  };
+  $('#copyLink').addEventListener('click', (e) => copy(link, e.target, '📋 Copiar link'));
+  $('#copyCode').addEventListener('click', (e) => copy(group.invite_code, e.target, `Copiar só o código (${group.invite_code})`));
+  $('#goDash')?.addEventListener('click', () => { closeModal(); location.hash = '#/dashboard'; route(); });
+}
+
+// ---------- ENTRAR COM CÓDIGO ----------
+function viewEntrar() {
+  app.innerHTML = `
+    <h2 class="page-title">Entrar num grupo</h2>
+    <p class="page-sub">Digite o código de convite que você recebeu</p>
+    <div class="card" style="max-width:440px">
+      <form id="jg">
+        <div class="field"><label>Código do convite</label>
+          <input name="code" required maxlength="10" placeholder="Ex.: ABC123" style="text-transform:uppercase;letter-spacing:.2em;font-weight:700;text-align:center">
+        </div>
+        <button class="btn" type="submit">Buscar grupo</button>
+      </form>
+      <div id="jgPreview"></div>
+    </div>`;
+  $('#jg').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = new FormData(e.target).get('code').toUpperCase().trim();
+    try {
+      const { group } = await api(`/invite/${code}`);
+      $('#jgPreview').innerHTML = `
+        <br>
+        <div class="group-item" style="cursor:default">
+          ${groupLogo(group)}
+          <span class="gi-info"><b>${esc(group.name)}</b>
+          <span class="sec">${group.member_count} participante${group.member_count > 1 ? 's' : ''}${group.description ? ' · ' + esc(group.description) : ''}</span></span>
+        </div>
+        <br><button class="btn gold" id="jgConfirm" style="width:100%">Entrar no grupo</button>`;
+      $('#jgConfirm').addEventListener('click', async (ev) => {
+        ev.target.disabled = true;
+        try {
+          const j = await api(`/invite/${code}/join`, { method: 'POST' });
+          toast(`🎉 Você entrou no <b>${esc(j.group.name)}</b>!`, 'gold');
+          await loadGroups();
+          setActiveGroup(state.groups.find((g) => g.id === j.group.id));
+          location.hash = '#/dashboard';
+        } catch (err) { toast(esc(err.message), 'err'); ev.target.disabled = false; }
+      });
+    } catch (err) { toast(esc(err.message), 'err'); $('#jgPreview').innerHTML = ''; }
+  });
+}
+
+// ---------- MEU GRUPO (info + gerência) ----------
+async function viewGrupo() {
+  const [{ group }, { members }] = await Promise.all([gapi(''), gapi('/members')]);
+  const isAdmin = group.my_role === 'owner' || group.my_role === 'admin';
+  const isOwner = group.my_role === 'owner';
+  const roleLabel = { owner: '👑 dono', admin: '🛡️ admin', member: 'membro' };
+
+  app.innerHTML = `
+    <h2 class="page-title">${esc(group.name)}</h2>
+    <p class="page-sub">${group.description ? esc(group.description) + ' · ' : ''}${group.member_count} participante${group.member_count > 1 ? 's' : ''} · você é ${roleLabel[group.my_role] || 'membro'}</p>
+    <div class="grid cols-2">
+      <div>
+        ${isAdmin ? `
+        <div class="card">
+          <h3>🎟️ Convite</h3>
+          <p class="muted" style="margin-bottom:10px">Compartilhe para chamar mais gente${group.max_members ? ` (limite: ${group.max_members} no plano gratuito)` : ''}.</p>
+          <div class="row-actions">
+            <button class="btn small" id="shareBtn">Compartilhar convite</button>
+            <button class="btn small ghost" id="newCodeBtn" title="O código antigo deixa de funcionar">Gerar novo código</button>
+          </div>
+        </div><br>
+        <div class="card">
+          <h3>🎨 Identidade do grupo</h3>
+          <form id="gedit">
+            <div class="field"><label>Nome</label><input name="name" value="${esc(group.name)}" required minlength="3" maxlength="60"></div>
+            <div class="field"><label>Descrição</label><input name="description" value="${esc(group.description || '')}" maxlength="300"></div>
+            <div class="field"><label>Logo (opcional, máx. 350KB)</label><input type="file" id="glogoInput" accept="image/*"></div>
+            <div class="field"><label>Cor principal</label>${colorPicker('color_primary', group.color_primary || '#117a4b', GROUP_COLORS)}</div>
+            <div class="field"><label>Cor de destaque</label>${colorPicker('color_secondary', group.color_secondary || '#e0a528', ACCENT_COLORS)}</div>
+            <button class="btn" type="submit">Salvar</button>
+          </form>
+        </div><br>
+        <div class="card">
+          <h3>🔔 Aviso para o grupo</h3>
+          <p class="muted" style="margin-bottom:10px">Notificação no celular de quem ativou (ex.: "Palpites encerram às 18h!").</p>
+          <div class="field"><label>Título</label><input id="gnTitle" placeholder="🔔 ${esc(group.name)}"></div>
+          <div class="field"><label>Mensagem</label><input id="gnBody" placeholder="Aviso do administrador do grupo."></div>
+          <button class="btn small" id="gnSend">Enviar aviso</button>
+        </div><br>
+        <div class="card">
+          <h3>📊 Exportar</h3>
+          <button class="btn gold" id="gExport">Exportar ranking (Excel)</button>
+        </div>` : `
+        <div class="card">
+          <h3>Sobre o grupo</h3>
+          <div style="text-align:center;margin:10px 0">${groupLogo(group, 64)}</div>
+          <p class="muted" style="text-align:center">${group.description ? esc(group.description) : 'Sem descrição.'}</p>
+          <br>
+          <button class="btn danger" id="leaveBtn" style="width:100%">Sair do grupo</button>
+        </div>`}
+      </div>
+      <div class="card">
+        <h3>👥 Participantes · ${members.length}</h3>
+        <div class="table-wrap"><table class="rank">
+          ${members.map((m) => `
+            <tr>
+              <td><div class="user-cell">${avatar(m)}<div>${esc(m.name)}${m.id === state.user.id ? ' <span class="tag">você</span>' : ''}<span class="sec">${esc(m.sector || '')}</span></div></div></td>
+              <td>${roleLabel[m.role] || ''}</td>
+              <td><div class="row-actions">
+                ${isOwner && m.role !== 'owner' ? `<button class="btn small ghost" data-grole="${m.id}" data-val="${m.role === 'admin' ? 'member' : 'admin'}">${m.role === 'admin' ? 'Remover admin' : 'Tornar admin'}</button>` : ''}
+                ${isAdmin && m.role !== 'owner' && m.id !== state.user.id ? `<button class="btn small danger" data-gkick="${m.id}">Remover</button>` : ''}
+              </div></td>
+            </tr>`).join('')}
+        </table></div>
+        ${isAdmin && !isOwner ? '<br><button class="btn danger" id="leaveBtn" style="width:100%">Sair do grupo</button>' : ''}
+      </div>
+    </div>`;
+
+  // --- ações de admin do grupo
+  bindColorPickers();
+  $('#shareBtn')?.addEventListener('click', () => inviteModal(group));
+  $('#newCodeBtn')?.addEventListener('click', async (e) => {
+    if (!confirm('Gerar um código novo? O link/código antigo deixa de funcionar.')) return;
+    e.target.disabled = true;
+    try {
+      const d = await api(`/groups/${group.id}/invite`, { method: 'POST' });
+      group.invite_code = d.invite_code;
+      toast('Novo código gerado!');
+      inviteModal(group);
+    } catch (err) { toast(esc(err.message), 'err'); }
+    e.target.disabled = false;
+  });
+
+  let glogoData = null;
+  $('#glogoInput')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      const s = Math.min(1, 200 / Math.max(img.width, img.height));
+      c.width = img.width * s; c.height = img.height * s;
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      glogoData = c.toDataURL('image/jpeg', .8);
+      toast('Logo carregada — clique em Salvar.');
+    };
+    img.src = URL.createObjectURL(file);
+  });
+  $('#gedit')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target));
+    if (glogoData) body.logo = glogoData;
+    try {
+      await api(`/groups/${group.id}`, { method: 'PUT', body });
+      toast('Grupo atualizado!');
+      await loadGroups();
+      viewGrupo();
+    } catch (err) { toast(esc(err.message), 'err'); }
+  });
+
+  $('#gnSend')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const d = await gapi('/notify', { method: 'POST', body: { title: $('#gnTitle').value, body: $('#gnBody').value } });
+      toast(d.devices ? `Aviso enviado para ${d.devices} aparelho(s).` : 'Ninguém ativou notificações ainda.', d.devices ? '' : 'err');
+    } catch (err) { toast(esc(err.message), 'err'); }
+    e.target.disabled = false;
+  });
+
+  $('#gExport')?.addEventListener('click', async () => {
+    const res = await fetch(`/api/groups/${group.id}/export`, { headers: { Authorization: 'Bearer ' + state.token } });
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ranking-bolao.csv';
+    a.click();
+  });
+
+  // --- membros
+  app.querySelectorAll('[data-gkick]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Remover este participante do grupo? (os palpites dele não são apagados)')) return;
+    try { await api(`/groups/${group.id}/members/${b.dataset.gkick}`, { method: 'DELETE' }); toast('Participante removido.'); viewGrupo(); }
+    catch (err) { toast(esc(err.message), 'err'); }
+  }));
+  app.querySelectorAll('[data-grole]').forEach((b) => b.addEventListener('click', async () => {
+    try { await api(`/groups/${group.id}/members/${b.dataset.grole}`, { method: 'PUT', body: { role: b.dataset.val } }); viewGrupo(); }
+    catch (err) { toast(esc(err.message), 'err'); }
+  }));
+  $('#leaveBtn')?.addEventListener('click', async () => {
+    if (!confirm(`Sair do grupo "${group.name}"?`)) return;
+    try {
+      await api(`/groups/${group.id}/members/${state.user.id}`, { method: 'DELETE' });
+      toast('Você saiu do grupo.');
+      localStorage.removeItem('activeGroupId');
+      await loadGroups();
+      location.hash = state.group ? '#/dashboard' : '#/bemvindo';
+    } catch (err) { toast(esc(err.message), 'err'); }
   });
 }
 
@@ -1119,6 +1527,10 @@ const routes = {
   login: () => viewAuth('login'),
   cadastro: () => viewAuth('cadastro'),
   recuperar: () => viewAuth('recuperar'),
+  bemvindo: viewBemvindo,
+  novogrupo: viewNovoGrupo,
+  entrar: viewEntrar,
+  grupo: viewGrupo,
   dashboard: viewDashboard,
   jogos: viewJogos,
   ranking: viewRanking,
@@ -1127,9 +1539,29 @@ const routes = {
   admin: () => viewAdmin('jogos'),
 };
 
+// Telas que só fazem sentido dentro de um grupo ativo
+const NEEDS_GROUP = ['dashboard', 'jogos', 'ranking', 'chat', 'grupo'];
+
 async function route() {
-  const name = (location.hash.replace('#/', '') || 'dashboard').split('/')[0];
+  const segs = (location.hash.replace('#/', '') || 'dashboard').split('/');
+  const name = segs[0] || 'dashboard';
   const isAuthPage = ['login', 'cadastro', 'recuperar'].includes(name);
+
+  // Link de convite (/#/invite/CODIGO): guarda o código e entra após o login
+  if (name === 'invite' && segs[1]) {
+    localStorage.setItem('pendingInvite', segs[1].toUpperCase().trim());
+    if (!state.token) { location.hash = '#/login'; return; }
+    const code = localStorage.getItem('pendingInvite');
+    localStorage.removeItem('pendingInvite');
+    try {
+      const j = await api(`/invite/${code}/join`, { method: 'POST' });
+      toast(`🎉 Você entrou no grupo <b>${esc(j.group.name)}</b>!`, 'gold');
+      localStorage.setItem('activeGroupId', j.group.id);
+      state.groupsLoaded = false;
+    } catch (err) { toast(esc(err.message), 'err'); }
+    location.hash = '#/dashboard';
+    return;
+  }
 
   if (!state.token && !isAuthPage) { location.hash = '#/login'; return; }
   if (state.token && isAuthPage) { location.hash = '#/dashboard'; return; }
@@ -1139,9 +1571,18 @@ async function route() {
     try { state.user = (await api('/auth/me')).user; connectWS(); }
     catch { return; } // token inválido -> logout() já redirecionou
   }
+  // Carrega os grupos (uma vez por sessão)
+  if (state.token && !state.groupsLoaded) {
+    try { await loadGroups(); } catch { /* tenta de novo na próxima navegação */ }
+  }
+  // Sem grupo ainda: tudo leva para o bem-vindo
+  if (state.token && !state.group && NEEDS_GROUP.includes(name)) {
+    location.hash = '#/bemvindo'; return;
+  }
 
   $('#topbar').hidden = isAuthPage;
   $('#navAdmin').hidden = !state.user?.is_admin;
+  updateGroupChip();
   document.querySelectorAll('.nav a').forEach(a =>
     a.classList.toggle('active', a.dataset.route === name));
 
