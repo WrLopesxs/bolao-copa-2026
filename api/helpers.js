@@ -35,6 +35,10 @@ function validScore(v) {
 
 const lc = (s) => String(s || '').trim().toLowerCase();
 
+/** Normaliza texto para comparação tolerante (minúsculo, sem acento). */
+const normTxt = (s) => String(s || '').toLowerCase().normalize('NFD')
+  .replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+
 /**
  * Rate limiting simples em memória, por IP+rota. Em serverless cada instância
  * tem seu próprio contador — não é perfeito, mas barra força-bruta básica.
@@ -53,4 +57,4 @@ function rateLimit(max, windowMs) {
   };
 }
 
-module.exports = { h, isLocked, publicMatch, validScore, lc, rateLimit, LOCK_BEFORE_MS };
+module.exports = { h, isLocked, publicMatch, validScore, lc, normTxt, rateLimit, LOCK_BEFORE_MS };

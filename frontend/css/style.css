@@ -144,6 +144,12 @@ body:has(#topbar[hidden]) { padding-top: 0; } /* tela de login não tem topbar *
   transform: scale(1.08);
 }
 
+/* card de upsell premium */
+.premium-card {
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  background: linear-gradient(135deg, var(--card), var(--gold-soft));
+}
+
 /* caixa do link de convite */
 .invite-box {
   background: var(--bg); border: 1px dashed var(--border); border-radius: 9px;
@@ -419,6 +425,7 @@ table.rank td.pos { font-weight: 700; width: 46px; }
   background: var(--accent-soft); color: var(--accent);
   padding: 1px 7px; border-radius: 999px; vertical-align: middle;
 }
+.tag.gold { background: var(--gold-soft); color: var(--gold); text-transform: none; }
 
 /* ------------------------------------------------ modal */
 .modal {

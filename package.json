@@ -4,9 +4,9 @@
   "description": "Bolão da Copa do Mundo 2026 - palpites, ranking e pontuação automática (Postgres / Vercel-ready)",
   "main": "backend/server.js",
   "scripts": {
-    "start": "node backend/server.js",
+    "start": "node --env-file-if-exists=.env backend/server.js",
     "seed": "node database/seed.js",
-    "dev": "node --watch backend/server.js"
+    "dev": "node --watch --env-file-if-exists=.env backend/server.js"
   },
   "engines": {
     "node": ">=18"

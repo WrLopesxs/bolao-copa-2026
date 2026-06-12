@@ -14,6 +14,7 @@ const { getRanking, POINTS } = require('../backend/scoring');
 const { sendPush } = require('./push');
 const { syncIfStale } = require('./football-api');
 const { h, isLocked, publicMatch, rateLimit } = require('./helpers');
+const teams = require('../database/teams.json');
 
 const router = express.Router();
 
@@ -78,6 +79,13 @@ const requireRole = (min) => (req, res, next) => {
 const memberCount = async (gid) =>
   (await get('SELECT COUNT(*)::int AS c FROM group_members WHERE group_id = $1', [gid])).c;
 
+/** Exige grupo premium (recursos pagos). */
+const requirePremium = (req, res, next) => {
+  if (req.group.plan !== 'premium')
+    return res.status(403).json({ error: 'Recurso exclusivo de grupos premium. ⭐', premium_required: true });
+  next();
+};
+
 // ============================================================ CONVITES
 // Preview público do convite (aparece antes do login/cadastro).
 router.get('/invite/:code', rateLimit(30, 5 * 60_000), h(async (req, res) => {
@@ -98,7 +106,7 @@ router.post('/invite/:code/join', requireAuth, rateLimit(20, 5 * 60_000), h(asyn
   if (!already) {
     const count = await memberCount(g.id);
     if (g.max_members != null && count >= g.max_members)
-      return res.status(403).json({ error: `Este grupo atingiu o limite de ${g.max_members} participantes.` });
+      return res.status(403).json({ error: `Este grupo atingiu o limite de ${g.max_members} participantes do plano gratuito. Peça ao dono do grupo para ativar o premium. ⭐` });
     await run('INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, $3)', [g.id, req.user.id, 'member']);
   }
   res.json({ ok: true, group: groupView(g, { role: already ? undefined : 'member' }) });
@@ -155,10 +163,21 @@ router.get('/groups/:gid', requireAuth, requireMember, h(async (req, res) => {
 // Editar identidade do grupo (admin do grupo)
 router.put('/groups/:gid', requireAuth, requireMember, requireRole('admin'), h(async (req, res) => {
   const b = req.body || {};
+  if (b.logo && req.group.plan !== 'premium')
+    return res.status(403).json({ error: 'Logo personalizada é um recurso premium. ⭐' });
   if (b.logo && String(b.logo).length > 500_000) return res.status(400).json({ error: 'Logo muito grande (máx. ~350KB).' });
   const name = b.name != null ? String(b.name).trim() : null;
   if (name != null && (name.length < 3 || name.length > 60))
     return res.status(400).json({ error: 'O nome do grupo deve ter entre 3 e 60 caracteres.' });
+  // pontuação personalizada (premium): inteiro 0..100; string vazia volta ao padrão
+  const customPts = (v) => {
+    if (v === '' || v === undefined) return undefined;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 0 && n <= 100 ? n : undefined;
+  };
+  const hasCustom = ['points_exact', 'points_outcome', 'points_goals'].some((k) => k in b);
+  if (hasCustom && req.group.plan !== 'premium')
+    return res.status(403).json({ error: 'Pontuação personalizada é um recurso premium. ⭐' });
   await run(
     `UPDATE groups SET
        name = COALESCE($1, name),
@@ -173,6 +192,13 @@ router.put('/groups/:gid', requireAuth, requireMember, requireRole('admin'), h(a
      b.color_secondary != null ? validColor(b.color_secondary) : null,
      req.group.id]
   );
+  if (hasCustom) {
+    const ex = customPts(b.points_exact), ou = customPts(b.points_outcome), gl = customPts(b.points_goals);
+    // se a regra é igual à padrão, limpa (volta a usar os pontos gravados)
+    const isDefault = (ex ?? 10) === 10 && (ou ?? 5) === 5 && (gl ?? 2) === 2;
+    await run('UPDATE groups SET points_exact=$1, points_outcome=$2, points_goals=$3 WHERE id=$4',
+      isDefault ? [null, null, null, req.group.id] : [ex ?? 10, ou ?? 5, gl ?? 2, req.group.id]);
+  }
   const g = await get('SELECT * FROM groups WHERE id = $1', [req.group.id]);
   res.json({ group: groupView(g, { role: req.membership.role, withCode: true }) });
 }));
@@ -187,7 +213,7 @@ router.post('/groups/:gid/invite', requireAuth, requireMember, requireRole('admi
 // ============================================================= MEMBROS
 router.get('/groups/:gid/members', requireAuth, requireMember, h(async (req, res) => {
   const members = await all(`
-    SELECT u.id, u.name, u.photo, u.sector, gm.role, gm.joined_at
+    SELECT u.id, u.name, u.photo, u.sector, gm.role, gm.title, gm.joined_at
       FROM group_members gm JOIN users u ON u.id = gm.user_id
      WHERE gm.group_id = $1
      ORDER BY CASE gm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, u.name`,
@@ -209,12 +235,26 @@ router.delete('/groups/:gid/members/:uid', requireAuth, requireMember, h(async (
   res.json({ ok: true });
 }));
 
-// Promover/rebaixar membro (só o dono)
-router.put('/groups/:gid/members/:uid', requireAuth, requireMember, requireRole('owner'), h(async (req, res) => {
+// Promover/rebaixar membro (dono) ou definir apelido de zoeira
+// (cada um define o próprio; o dono pode moderar o de qualquer um)
+router.put('/groups/:gid/members/:uid', requireAuth, requireMember, h(async (req, res) => {
   const uid = Number(req.params.uid);
-  const role = req.body?.role === 'admin' ? 'admin' : 'member';
   const target = await get('SELECT * FROM group_members WHERE group_id = $1 AND user_id = $2', [req.group.id, uid]);
   if (!target) return res.status(404).json({ error: 'Membro não encontrado.' });
+
+  if ('title' in (req.body || {})) { // apelido personalizado (premium)
+    if (req.group.plan !== 'premium')
+      return res.status(403).json({ error: 'Apelidos personalizados são um recurso premium. ⭐' });
+    if (uid !== req.user.id && req.membership.role !== 'owner')
+      return res.status(403).json({ error: 'Você só pode mudar o seu próprio apelido.' });
+    const title = String(req.body.title || '').trim().slice(0, 24);
+    await run('UPDATE group_members SET title = $1 WHERE group_id = $2 AND user_id = $3', [title, req.group.id, uid]);
+    return res.json({ ok: true });
+  }
+
+  if (req.membership.role !== 'owner')
+    return res.status(403).json({ error: 'Apenas o dono pode alterar papéis.' });
+  const role = req.body?.role === 'admin' ? 'admin' : 'member';
   if (target.role === 'owner') return res.status(400).json({ error: 'O papel do dono não pode ser alterado.' });
   await run('UPDATE group_members SET role = $1 WHERE group_id = $2 AND user_id = $3', [role, req.group.id, uid]);
   res.json({ ok: true });
@@ -258,14 +298,20 @@ router.post('/groups/:gid/chat', requireAuth, requireMember, h(async (req, res) 
 
 router.get('/groups/:gid/ranking', requireAuth, requireMember, h(async (req, res) => {
   res.json({
-    ranking: await getRanking(req.query.stage || null, req.group.id),
-    points_table: POINTS,
+    ranking: await getRanking(req.query.stage || null, req.group),
+    points_table: {
+      EXACT: req.group.points_exact ?? POINTS.EXACT,
+      OUTCOME: req.group.points_outcome ?? POINTS.OUTCOME,
+      TEAM_GOALS: req.group.points_goals ?? POINTS.TEAM_GOALS,
+    },
   });
 }));
 
 router.get('/groups/:gid/dashboard', requireAuth, requireMember, h(async (req, res) => {
   syncIfStale(); // dispara sync de resultados em background
-  const ranking = await getRanking(null, req.group.id);
+  const premium = req.group.plan === 'premium';
+  if (premium) await ensureRoundChampions(req.group).catch((e) => console.error('[rodada]', e.message));
+  const ranking = await getRanking(null, req.group);
   const me = ranking.find((r) => r.id === req.user.id) || null;
 
   const upcoming = (await all(`SELECT * FROM matches WHERE status='scheduled' AND date_utc > now() ORDER BY date_utc ASC LIMIT 6`)).map(publicMatch);
@@ -282,7 +328,26 @@ router.get('/groups/:gid/dashboard', requireAuth, requireMember, h(async (req, r
     label: `${x.home_team} x ${x.away_team}`, points: x.points, total: (acc += x.points),
   }));
 
-  res.json({ me, top10: ranking.slice(0, 10), upcoming, live, recent, evolution, total_users: ranking.length });
+  // extras premium: campeão da última rodada + resumo dos palpites bônus
+  let round_champion = null, bonus = null;
+  if (premium) {
+    round_champion = await get(`
+      SELECT rc.day, rc.points, u.id AS user_id, u.name, u.photo
+        FROM round_champions rc JOIN users u ON u.id = rc.user_id
+       WHERE rc.group_id = $1 ORDER BY rc.day DESC LIMIT 1`, [req.group.id]);
+    const bq = await get(`
+      SELECT COUNT(*)::int AS total, MIN(lock_at) AS lock_at,
+             COUNT(*) FILTER (WHERE a.user_id IS NOT NULL)::int AS answered
+        FROM bonus_questions q
+        LEFT JOIN bonus_answers a ON a.question_id = q.id AND a.user_id = $1
+       WHERE q.competition_id = $2`, [req.user.id, req.group.competition_id]);
+    bonus = bq && bq.total > 0 ? bq : null;
+  }
+
+  res.json({
+    me, top10: ranking.slice(0, 10), upcoming, live, recent, evolution,
+    total_users: ranking.length, premium, round_champion, bonus,
+  });
 }));
 
 // Comparação de palpites: só os palpites de quem é do grupo
@@ -292,8 +357,9 @@ router.get('/groups/:gid/matches/:mid/predictions', requireAuth, requireMember, 
   const locked = isLocked(match);
   let predictions = [];
   if (locked) {
+    // updated_at = auditoria anti-mamata (mostrado em grupos premium)
     predictions = await all(`
-      SELECT p.home_pred, p.away_pred, p.points, u.id AS user_id, u.name, u.photo
+      SELECT p.home_pred, p.away_pred, p.points, p.updated_at, u.id AS user_id, u.name, u.photo
         FROM predictions p
         JOIN users u ON u.id = p.user_id
         JOIN group_members gm ON gm.user_id = u.id AND gm.group_id = $2
@@ -307,9 +373,165 @@ router.get('/groups/:gid/matches/:mid/predictions', requireAuth, requireMember, 
   res.json({ match: publicMatch(match), locked, predictions });
 }));
 
+// ===================================== CAMPEÃO DA RODADA (premium)
+/**
+ * Para cada dia (UTC) em que TODOS os jogos terminaram e o grupo ainda não
+ * tem campeão registrado, calcula o vencedor, grava e avisa por push.
+ * Chamado de forma preguiçosa quando alguém abre o dashboard do grupo.
+ */
+async function ensureRoundChampions(group) {
+  const days = await all(`
+    SELECT DISTINCT (m.date_utc AT TIME ZONE 'UTC')::date AS day
+      FROM matches m
+     WHERE m.status = 'finished'
+       AND NOT EXISTS (SELECT 1 FROM round_champions rc
+                        WHERE rc.group_id = $1 AND rc.day = (m.date_utc AT TIME ZONE 'UTC')::date)
+       AND NOT EXISTS (SELECT 1 FROM matches m2
+                        WHERE (m2.date_utc AT TIME ZONE 'UTC')::date = (m.date_utc AT TIME ZONE 'UTC')::date
+                          AND m2.status <> 'finished')
+     ORDER BY day`, [group.id]);
+  for (const row of days) {
+    const day = row.day instanceof Date ? row.day.toISOString().slice(0, 10) : String(row.day).slice(0, 10);
+    const top = await get(`
+      SELECT h.user_id, SUM(h.points)::int AS pts
+        FROM score_history h
+        JOIN matches m ON m.id = h.match_id AND (m.date_utc AT TIME ZONE 'UTC')::date = $2::date
+        JOIN group_members gm ON gm.user_id = h.user_id AND gm.group_id = $1
+       GROUP BY h.user_id HAVING SUM(h.points) > 0
+       ORDER BY pts DESC LIMIT 1`, [group.id, day]);
+    if (!top) continue; // ninguém pontuou nesse dia
+    await run(`INSERT INTO round_champions (group_id, day, user_id, points)
+               VALUES ($1,$2,$3,$4) ON CONFLICT (group_id, day) DO NOTHING`,
+      [group.id, day, top.user_id, top.pts]);
+    const u = await get('SELECT name FROM users WHERE id = $1', [top.user_id]);
+    const [, mm, dd] = day.split('-');
+    const ids = (await all('SELECT user_id FROM group_members WHERE group_id = $1', [group.id])).map((r) => r.user_id);
+    for (const id of ids) {
+      await sendPush(id, {
+        title: `🏆 ${group.name}`,
+        body: `${u.name} foi o campeão da rodada de ${dd}/${mm} com ${top.pts} pontos!`,
+        url: '/#/dashboard',
+        tag: `rodada-${group.id}-${day}`,
+      }).catch(() => {});
+    }
+  }
+}
+
+// ========================================= PALPITES BÔNUS (premium)
+router.get('/groups/:gid/bonus', requireAuth, requireMember, requirePremium, h(async (req, res) => {
+  const questions = await all(`
+    SELECT q.*, a.answer AS my_answer, a.points AS my_points
+      FROM bonus_questions q
+      LEFT JOIN bonus_answers a ON a.question_id = q.id AND a.user_id = $1
+     WHERE q.competition_id = $2 ORDER BY q.id`, [req.user.id, req.group.competition_id]);
+  const t = (name) => teams[name]?.pt || name;
+  res.json({
+    questions: questions.map((q) => {
+      const lockIso = q.lock_at instanceof Date ? q.lock_at.toISOString() : q.lock_at;
+      const locked = Date.now() >= new Date(lockIso).getTime();
+      return {
+        id: q.id, question: q.question, qtype: q.qtype, points: q.points,
+        options: q.options ? JSON.parse(q.options) : null,
+        lock_at: lockIso, locked,
+        my_answer: q.my_answer, my_answer_pt: q.qtype === 'team' ? t(q.my_answer) : q.my_answer,
+        my_points: q.my_points,
+        // gabarito só aparece depois de travado E corrigido
+        correct_answer: locked && q.correct_answer
+          ? (q.qtype === 'team' ? t(q.correct_answer) : q.correct_answer) : null,
+      };
+    }),
+    teams: Object.entries(teams).map(([en, v]) => ({ en, pt: v.pt })).sort((a, b) => a.pt.localeCompare(b.pt, 'pt')),
+  });
+}));
+
+router.post('/groups/:gid/bonus/:qid', requireAuth, requireMember, requirePremium, h(async (req, res) => {
+  const q = await get('SELECT * FROM bonus_questions WHERE id = $1', [Number(req.params.qid)]);
+  if (!q) return res.status(404).json({ error: 'Pergunta não encontrada.' });
+  const lockIso = q.lock_at instanceof Date ? q.lock_at.toISOString() : q.lock_at;
+  if (Date.now() >= new Date(lockIso).getTime())
+    return res.status(403).json({ error: 'Este palpite bônus já está travado.' });
+
+  let answer = String(req.body?.answer || '').trim();
+  if (q.qtype === 'team' && !teams[answer]) return res.status(400).json({ error: 'Escolha uma seleção válida.' });
+  if (q.qtype === 'choice' && !JSON.parse(q.options || '[]').includes(answer))
+    return res.status(400).json({ error: 'Escolha uma das opções.' });
+  if (q.qtype === 'text' && (answer.length < 2 || answer.length > 60))
+    return res.status(400).json({ error: 'Resposta deve ter entre 2 e 60 caracteres.' });
+
+  await run(`
+    INSERT INTO bonus_answers (question_id, user_id, answer, updated_at) VALUES ($1,$2,$3, now())
+    ON CONFLICT (question_id, user_id) DO UPDATE SET answer = excluded.answer, updated_at = now()`,
+    [q.id, req.user.id, answer]);
+  res.json({ ok: true });
+}));
+
+// =============================================== RAIO-X DO GRUPO (premium)
+router.get('/groups/:gid/stats', requireAuth, requireMember, requirePremium, h(async (req, res) => {
+  const gid = req.group.id;
+  const members = await all(`
+    SELECT u.id, u.name, u.photo, gm.title
+      FROM group_members gm JOIN users u ON u.id = gm.user_id
+     WHERE gm.group_id = $1`, [gid]);
+
+  // pontos por jogo encerrado de cada membro (score_history guarda inclusive 0)
+  const hist = await all(`
+    SELECT h.user_id, h.points, h.match_id, (m.date_utc AT TIME ZONE 'UTC')::date AS day
+      FROM score_history h
+      JOIN matches m ON m.id = h.match_id
+      JOIN group_members gm ON gm.user_id = h.user_id AND gm.group_id = $1
+     ORDER BY m.date_utc ASC, h.match_id ASC`, [gid]);
+
+  const byUser = new Map(members.map((m) => [m.id, {
+    ...m, total: 0, exacts: 0, zeros: 0, scoring: 0, played: 0,
+    bestDay: null, bestDayPts: 0, zebras: 0, days: new Map(),
+  }]));
+
+  // quantos do grupo pontuaram em cada jogo (para achar a "zebra")
+  const matchScorers = new Map(); // match_id -> {scored, total}
+  for (const h of hist) {
+    const s = matchScorers.get(h.match_id) || { scored: 0, total: 0 };
+    s.total++; if (h.points > 0) s.scored++;
+    matchScorers.set(h.match_id, s);
+  }
+
+  for (const hRow of hist) {
+    const u = byUser.get(hRow.user_id);
+    if (!u) continue;
+    const day = hRow.day instanceof Date ? hRow.day.toISOString().slice(0, 10) : String(hRow.day).slice(0, 10);
+    u.played++; u.total += hRow.points;
+    if (hRow.points === 10) u.exacts++;
+    if (hRow.points > 0) u.scoring++; else u.zeros++;
+    u.days.set(day, (u.days.get(day) || 0) + hRow.points);
+    const ms = matchScorers.get(hRow.match_id);
+    // zebra: pontuou num jogo em que no máximo 1/4 do grupo pontuou (e tem gente suficiente)
+    if (hRow.points > 0 && ms.total >= 4 && ms.scored / ms.total <= 0.25) u.zebras++;
+  }
+
+  const stats = [...byUser.values()].map((u) => {
+    for (const [day, pts] of u.days) if (pts > u.bestDayPts) { u.bestDayPts = pts; u.bestDay = day; }
+    const { days, ...rest } = u;
+    return {
+      ...rest,
+      accuracy: u.played ? Math.round((u.scoring / u.played) * 100) : 0,
+      // série acumulada para o gráfico "corrida pelo título"
+      evolution: [...days.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)
+        .reduce((acc, [day, pts]) => { acc.push({ day, total: (acc.at(-1)?.total || 0) + pts }); return acc; }, []),
+    };
+  }).sort((a, b) => b.total - a.total);
+
+  const champions = await all(`
+    SELECT rc.day, rc.points, u.id AS user_id, u.name, u.photo
+      FROM round_champions rc JOIN users u ON u.id = rc.user_id
+     WHERE rc.group_id = $1 ORDER BY rc.day DESC LIMIT 20`, [gid]);
+
+  res.json({ stats, champions });
+}));
+
 // Exportar ranking do grupo em CSV (admin do grupo)
 router.get('/groups/:gid/export', requireAuth, requireMember, requireRole('admin'), h(async (req, res) => {
-  const ranking = await getRanking(null, req.group.id);
+  if (req.group.plan !== 'premium')
+    return res.status(403).json({ error: 'Exportação para Excel é um recurso premium. ⭐' });
+  const ranking = await getRanking(null, req.group);
   const sep = ';';
   const clean = (s) => `"${String(s || '').replace(/"/g, '""').replace(/^[=+\-@]/, "'$&")}"`; // anti CSV injection
   const lines = [

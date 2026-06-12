@@ -80,7 +80,9 @@ function updateGroupChip() {
   const chip = $('#groupChip');
   chip.hidden = !state.group;
   if (state.group) $('#groupChipName').textContent = state.group.name;
+  $('#groupBtn').hidden = !state.group; // engrenagem do grupo no header
 }
+$('#groupBtn').addEventListener('click', () => { location.hash = '#/grupo'; });
 
 // Paleta de cores do grupo (estilo Paint: clica e pronto)
 const GROUP_COLORS = ['#117a4b', '#16a34a', '#0d9488', '#1d4ed8', '#0284c7', '#7c3aed', '#db2777', '#cc0000', '#ea580c', '#ca8a04', '#475569', '#111827'];
@@ -129,7 +131,6 @@ function groupSwitcherModal() {
     <div class="row-actions" style="margin-top:14px">
       <button class="btn small ghost" id="gsNew">➕ Criar grupo</button>
       <button class="btn small ghost" id="gsJoin">🎟️ Entrar com código</button>
-      <button class="btn small" id="gsManage">⚙️ Ver grupo atual</button>
     </div>`);
   document.querySelectorAll('[data-gsel]').forEach((b) => b.addEventListener('click', () => {
     const g = state.groups.find((x) => x.id === Number(b.dataset.gsel));
@@ -138,7 +139,6 @@ function groupSwitcherModal() {
   }));
   $('#gsNew').addEventListener('click', () => { closeModal(); location.hash = '#/novogrupo'; });
   $('#gsJoin').addEventListener('click', () => { closeModal(); location.hash = '#/entrar'; });
-  $('#gsManage').addEventListener('click', () => { closeModal(); location.hash = '#/grupo'; });
 }
 $('#groupChip').addEventListener('click', groupSwitcherModal);
 
@@ -157,6 +157,10 @@ function avatar(user) {
 }
 function fmtDate(iso) {
   return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+function fmtDay(d) { // '2026-06-12' ou Date -> 12/06
+  const s = d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+  return `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 }
 function medal(pos) { return pos === 1 ? '🥇' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : pos + 'º'; }
 
@@ -490,6 +494,29 @@ async function viewDashboard() {
       <div class="stat"><div class="num">${me.exact_hits}</div><div class="lbl">Placares exatos</div></div>
     </div>
 
+    ${d.premium && (d.round_champion || d.bonus) ? `
+    <div class="grid cols-2" style="margin-bottom:14px">
+      ${d.round_champion ? `
+      <div class="card">
+        <h3>🏆 Campeão da rodada · ${fmtDay(d.round_champion.day)}</h3>
+        <div class="online-item">${avatar(d.round_champion)}
+          <div><b>${esc(d.round_champion.name)}</b><span class="sec"> · ${d.round_champion.points} pts no dia</span></div>
+        </div>
+      </div>` : ''}
+      ${d.bonus ? `
+      <div class="card">
+        <h3>🎯 Palpites Bônus</h3>
+        <p class="muted" style="margin-bottom:10px">Campeão, artilheiro e mais, valendo pontos extras.
+          Você respondeu <b>${d.bonus.answered}/${d.bonus.total}</b>${Date.now() < new Date(d.bonus.lock_at).getTime() ? ` · trava em ${fmtDate(d.bonus.lock_at)}` : ' · travado'}.</p>
+        <a class="btn ghost" href="#/bonus">${d.bonus.answered < d.bonus.total ? 'Responder agora' : 'Ver meus palpites bônus'}</a>
+      </div>` : ''}
+    </div>` : ''}
+    ${!d.premium ? `
+    <div class="card premium-card" style="margin-bottom:14px">
+      <p class="muted" style="font-size:.84rem">🎯 Palpites Bônus, 📊 Raio-X, 🏆 Campeão da Rodada e mais —
+        <a href="#/grupo" style="color:var(--accent);font-weight:700">conheça o premium ⭐</a></p>
+    </div>` : ''}
+
     ${d.live.length ? `<div class="card"><h3><span class="dot-live"></span> Ao vivo agora</h3><div class="match-list">${d.live.map(matchMini).join('')}</div></div><br>` : ''}
 
     <div class="grid cols-2">
@@ -534,14 +561,19 @@ async function viewDashboard() {
     state.chart = new Chart($('#evo'), {
       type: 'line',
       data: {
-        labels: d.evolution.map(e => new Date(e.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })),
+        // começa do zero para a linha mostrar a subida desde o início
+        labels: ['Início', ...d.evolution.map(e => new Date(e.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }))],
         datasets: [{
-          label: 'Pontos acumulados', data: d.evolution.map(e => e.total),
+          label: 'Pontos acumulados', data: [0, ...d.evolution.map(e => e.total)],
           borderColor: '#117a4b', backgroundColor: 'rgba(17,122,75,.12)',
           fill: true, tension: .3, pointBackgroundColor: '#117a4b', pointRadius: 3,
         }],
       },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }, // só pontos inteiros
+      },
     });
   } catch (e) { console.warn('[chart]', e); }
   bindCompare();
@@ -786,7 +818,9 @@ async function showCompare(matchId) {
         <tr><th>Participante</th><th>Palpite</th><th>Pts</th></tr>
         ${d.predictions.map(p => `
           <tr class="${p.user_id === state.user.id ? 'me' : ''}">
-            <td><div class="user-cell">${avatar(p)}<div>${esc(p.name)}</div></div></td>
+            <td><div class="user-cell">${avatar(p)}<div>${esc(p.name)}
+              ${state.group?.plan === 'premium' && p.updated_at ? `<span class="sec" title="auditoria: quando o palpite foi salvo">🕐 salvo ${fmtDate(p.updated_at)}</span>` : ''}
+            </div></div></td>
             <td><b>${p.home_pred} x ${p.away_pred}</b></td>
             <td>${p.points ?? '–'}</td>
           </tr>`).join('') || '<tr><td colspan="3" class="muted">Ninguém palpitou neste jogo.</td></tr>'}
@@ -806,6 +840,7 @@ async function viewRanking() {
       <button class="chip ${!stage ? 'active' : ''}" data-s="">Geral</button>
       ${Object.entries(STAGES).map(([k, v]) =>
         `<button class="chip ${stage === k ? 'active' : ''}" data-s="${k}">${v}</button>`).join('')}
+      <a class="chip" href="#/raio" style="text-decoration:none">📊 Raio-X${state.group.plan !== 'premium' ? ' ⭐' : ''}</a>
     </div>
     <div class="card">
       <div class="table-wrap"><table class="rank">
@@ -813,8 +848,8 @@ async function viewRanking() {
         ${d.ranking.map(r => `
           <tr class="${r.id === state.user.id ? 'me' : ''}">
             <td class="pos">${medal(r.position)}</td>
-            <td><div class="user-cell">${avatar(r)}<div>${esc(r.name)}<span class="sec">${esc(r.sector || '')}</span></div></div></td>
-            <td><b>${r.total_points}</b></td>
+            <td><div class="user-cell">${avatar(r)}<div>${esc(r.name)}${r.title ? ` <span class="tag gold">${esc(r.title)}</span>` : ''}<span class="sec">${esc(r.sector || '')}</span></div></div></td>
+            <td><b>${r.total_points}</b>${r.bonus_points > 0 ? ` <span class="sec" title="pontos dos palpites bônus">🎯+${r.bonus_points}</span>` : ''}</td>
             <td>${r.exact_hits}</td>
             <td>${r.total_predictions}</td>
           </tr>`).join('')}
@@ -901,8 +936,35 @@ async function viewPerfil() {
 async function viewAdmin(tab = 'jogos') {
   if (!state.user?.is_admin) { location.hash = '#/dashboard'; return; }
 
-  const tabs = [['jogos', 'Jogos'], ['usuarios', 'Usuários'], ['config', 'Configurações']];
+  const tabs = [['jogos', 'Jogos'], ['usuarios', 'Usuários'], ['bonus', 'Bônus 🎯'], ['config', 'Configurações']];
   let inner = '';
+
+  if (tab === 'bonus') {
+    const d = await api('/admin/bonus');
+    const answersFor = (qid) => d.answers.filter((a) => a.question_id === qid);
+    const tPt = (en) => d.teams.find((t) => t.en === en)?.pt || en;
+    inner = d.questions.map((q) => {
+      const ans = answersFor(q.id);
+      const total = ans.reduce((s, a) => s + a.n, 0);
+      const field = q.qtype === 'team'
+        ? `<select name="correct_answer"><option value="">— sem gabarito —</option>
+             ${d.teams.map((t) => `<option value="${esc(t.en)}" ${q.correct_answer === t.en ? 'selected' : ''}>${esc(t.pt)}</option>`).join('')}</select>`
+        : q.qtype === 'choice'
+          ? `<select name="correct_answer"><option value="">— sem gabarito —</option>
+               ${q.options.map((o) => `<option value="${esc(o)}" ${q.correct_answer === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+          : `<input name="correct_answer" maxlength="60" value="${esc(q.correct_answer || '')}" placeholder="Ex.: Haaland">`;
+      return `
+      <div class="card" style="margin-bottom:14px">
+        <h3>${esc(q.question)} <span class="badge pts">+${q.points} pts</span></h3>
+        <p class="muted" style="margin-bottom:8px">Trava em ${fmtDate(q.lock_at)} · <b>${total}</b> resposta(s)
+          ${ans.length ? '· mais votadas: ' + ans.slice(0, 4).map((a) => `<b>${esc(q.qtype === 'team' ? tPt(a.answer) : a.answer)}</b> (${a.n})`).join(', ') : ''}</p>
+        <form data-bq="${q.id}" class="inline-form">
+          <div class="field"><label>Resposta certa</label>${field}</div>
+          <button class="btn small" type="submit">Salvar gabarito</button>
+        </form>
+      </div>`;
+    }).join('');
+  }
 
   if (tab === 'usuarios') {
     const [{ users }, { matches }] = await Promise.all([api('/admin/users'), api('/matches')]);
@@ -1056,6 +1118,17 @@ async function viewAdmin(tab = 'jogos') {
     } catch (err) { toast(esc(err.message), 'err'); }
   });
 
+  // --- ações da aba bônus (gabarito)
+  app.querySelectorAll('[data-bq]').forEach((f) => f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const d = await api('/admin/bonus/' + f.dataset.bq, {
+        method: 'PUT', body: { correct_answer: new FormData(f).get('correct_answer') },
+      });
+      toast(`Gabarito salvo! ${d.scored} resposta(s) pontuada(s).`);
+    } catch (err) { toast(esc(err.message), 'err'); }
+  }));
+
   // --- ações da aba jogos
   app.querySelectorAll('[data-edit]').forEach(tr =>
     tr.addEventListener('click', () => editMatchModal(Number(tr.dataset.edit))));
@@ -1119,9 +1192,8 @@ function editMatchModal(id) {
         <div class="field"><label>Time da casa</label><input name="home_team" value="${esc(m.home_team)}"></div>
         <div class="field"><label>Visitante</label><input name="away_team" value="${esc(m.away_team)}"></div>
       </div>
+      <p class="muted" style="margin-bottom:10px">Placar atual: <b>${m.home_score ?? '–'} x ${m.away_score ?? '–'}</b> — o placar vem da sincronização automática e não pode ser editado.</p>
       <div class="inline-form" style="margin-bottom:10px">
-        <div class="field"><label>Gols casa</label><input class="mini-input" name="home_score" type="number" min="0" max="99" value="${m.home_score ?? ''}"></div>
-        <div class="field"><label>Gols visitante</label><input class="mini-input" name="away_score" type="number" min="0" max="99" value="${m.away_score ?? ''}"></div>
         <div class="field"><label>Data/hora (UTC)</label><input name="date_utc" value="${esc(m.date_utc)}"></div>
       </div>
       <div class="inline-form" style="margin-bottom:14px">
@@ -1374,20 +1446,45 @@ function viewEntrar() {
 
 // ---------- MEU GRUPO (info + gerência) ----------
 async function viewGrupo() {
+  // Volta do checkout da Stripe: /#/grupo/sucesso/SESSION_ID
+  const segs = location.hash.replace('#/', '').split('/');
+  if (segs[1] === 'sucesso' && segs[2]) {
+    try {
+      await gapi('/checkout/confirm', { method: 'POST', body: { session_id: segs[2] } });
+      toast('🎉 <b>Grupo premium ativado!</b> Participantes ilimitados liberados.', 'gold');
+      await loadGroups();
+    } catch (err) { toast(esc(err.message), 'err'); }
+    location.hash = '#/grupo';
+    return;
+  }
+
   const [{ group }, { members }] = await Promise.all([gapi(''), gapi('/members')]);
   const isAdmin = group.my_role === 'owner' || group.my_role === 'admin';
   const isOwner = group.my_role === 'owner';
+  const isPremium = group.plan === 'premium';
   const roleLabel = { owner: '👑 dono', admin: '🛡️ admin', member: 'membro' };
 
   app.innerHTML = `
-    <h2 class="page-title">${esc(group.name)}</h2>
-    <p class="page-sub">${group.description ? esc(group.description) + ' · ' : ''}${group.member_count} participante${group.member_count > 1 ? 's' : ''} · você é ${roleLabel[group.my_role] || 'membro'}</p>
+    <h2 class="page-title">${esc(group.name)} ${isPremium ? '<span class="badge pts" style="vertical-align:middle">⭐ PREMIUM</span>' : ''}</h2>
+    <p class="page-sub">${group.description ? esc(group.description) + ' · ' : ''}${group.member_count} participante${group.member_count > 1 ? 's' : ''}${group.max_members ? ` de ${group.max_members}` : ''} · você é ${roleLabel[group.my_role] || 'membro'}</p>
     <div class="grid cols-2">
       <div>
+        ${isAdmin && !isPremium ? `
+        <div class="card premium-card">
+          <h3>⭐ Vire premium</h3>
+          <p class="muted" style="margin-bottom:10px">
+            <b>Participantes ilimitados</b> (hoje: ${group.member_count}/${group.max_members || 10}) ·
+            🎯 <b>Palpites Bônus</b> (campeão, artilheiro…) · 📊 <b>Raio-X</b> com corrida pelo título e prêmios ·
+            🏆 <b>Campeão da Rodada</b> com push automático · 🏷️ títulos de zoeira ·
+            🕐 auditoria anti-mamata · pontuação personalizada · logo própria · exportação Excel.
+          </p>
+          <button class="btn gold" id="goPremium" style="width:100%">⭐ Virar premium — R$ 29,90</button>
+          <p class="muted" style="margin-top:8px;font-size:.74rem;text-align:center">Pagamento único e seguro via Stripe · Pix ou cartão</p>
+        </div><br>` : ''}
         ${isAdmin ? `
         <div class="card">
           <h3>🎟️ Convite</h3>
-          <p class="muted" style="margin-bottom:10px">Compartilhe para chamar mais gente${group.max_members ? ` (limite: ${group.max_members} no plano gratuito)` : ''}.</p>
+          <p class="muted" style="margin-bottom:10px">Compartilhe para chamar mais gente${!isPremium && group.max_members ? ` (${group.member_count}/${group.max_members} no plano gratuito)` : ''}.</p>
           <div class="row-actions">
             <button class="btn small" id="shareBtn">Compartilhar convite</button>
             <button class="btn small ghost" id="newCodeBtn" title="O código antigo deixa de funcionar">Gerar novo código</button>
@@ -1398,9 +1495,20 @@ async function viewGrupo() {
           <form id="gedit">
             <div class="field"><label>Nome</label><input name="name" value="${esc(group.name)}" required minlength="3" maxlength="60"></div>
             <div class="field"><label>Descrição</label><input name="description" value="${esc(group.description || '')}" maxlength="300"></div>
-            <div class="field"><label>Logo (opcional, máx. 350KB)</label><input type="file" id="glogoInput" accept="image/*"></div>
+            ${isPremium
+              ? '<div class="field"><label>Logo (opcional, máx. 350KB)</label><input type="file" id="glogoInput" accept="image/*"></div>'
+              : '<div class="field"><label>Logo</label><p class="muted" style="font-size:.8rem">⭐ Recurso premium</p></div>'}
             <div class="field"><label>Cor principal</label>${colorPicker('color_primary', group.color_primary || '#117a4b', GROUP_COLORS)}</div>
             <div class="field"><label>Cor de destaque</label>${colorPicker('color_secondary', group.color_secondary || '#e0a528', ACCENT_COLORS)}</div>
+            ${isPremium ? `
+            <div class="field"><label>Pontuação do grupo (padrão 10 / 5 / 2)</label>
+              <div class="inline-form">
+                <div class="field"><label class="muted" style="font-weight:500">Placar exato</label><input name="points_exact" type="number" min="0" max="100" value="${group.points_exact ?? 10}"></div>
+                <div class="field"><label class="muted" style="font-weight:500">Resultado certo</label><input name="points_outcome" type="number" min="0" max="100" value="${group.points_outcome ?? 5}"></div>
+                <div class="field"><label class="muted" style="font-weight:500">Gols de um time</label><input name="points_goals" type="number" min="0" max="100" value="${group.points_goals ?? 2}"></div>
+              </div>
+              <p class="muted" style="font-size:.72rem">A regra personalizada vale para o ranking do grupo.</p>
+            </div>` : ''}
             <button class="btn" type="submit">Salvar</button>
           </form>
         </div><br>
@@ -1413,7 +1521,9 @@ async function viewGrupo() {
         </div><br>
         <div class="card">
           <h3>📊 Exportar</h3>
-          <button class="btn gold" id="gExport">Exportar ranking (Excel)</button>
+          ${isPremium
+            ? '<button class="btn gold" id="gExport">Exportar ranking (Excel)</button>'
+            : '<p class="muted">⭐ Recurso premium — exporte o ranking completo para o Excel.</p>'}
         </div>` : `
         <div class="card">
           <h3>Sobre o grupo</h3>
@@ -1428,9 +1538,10 @@ async function viewGrupo() {
         <div class="table-wrap"><table class="rank">
           ${members.map((m) => `
             <tr>
-              <td><div class="user-cell">${avatar(m)}<div>${esc(m.name)}${m.id === state.user.id ? ' <span class="tag">você</span>' : ''}<span class="sec">${esc(m.sector || '')}</span></div></div></td>
+              <td><div class="user-cell">${avatar(m)}<div>${esc(m.name)}${m.id === state.user.id ? ' <span class="tag">você</span>' : ''}${m.title ? ` <span class="tag gold">${esc(m.title)}</span>` : ''}<span class="sec">${esc(m.sector || '')}</span></div></div></td>
               <td>${roleLabel[m.role] || ''}</td>
               <td><div class="row-actions">
+                ${isPremium && (m.id === state.user.id || isOwner) ? `<button class="btn small ghost" data-gtitle="${m.id}" data-cur="${esc(m.title || '')}" title="${m.id === state.user.id ? 'Definir meu apelido' : 'Moderar apelido'}">🏷️${m.id === state.user.id ? ' meu apelido' : ''}</button>` : ''}
                 ${isOwner && m.role !== 'owner' ? `<button class="btn small ghost" data-grole="${m.id}" data-val="${m.role === 'admin' ? 'member' : 'admin'}">${m.role === 'admin' ? 'Remover admin' : 'Tornar admin'}</button>` : ''}
                 ${isAdmin && m.role !== 'owner' && m.id !== state.user.id ? `<button class="btn small danger" data-gkick="${m.id}">Remover</button>` : ''}
               </div></td>
@@ -1442,6 +1553,18 @@ async function viewGrupo() {
 
   // --- ações de admin do grupo
   bindColorPickers();
+  $('#goPremium')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Abrindo pagamento…';
+    try {
+      const d = await gapi('/checkout', { method: 'POST' });
+      location.href = d.url; // página segura de pagamento da Stripe
+    } catch (err) {
+      toast(esc(err.message), 'err');
+      e.target.disabled = false;
+      e.target.textContent = '⭐ Virar premium — R$ 29,90';
+    }
+  });
   $('#shareBtn')?.addEventListener('click', () => inviteModal(group));
   $('#newCodeBtn')?.addEventListener('click', async (e) => {
     if (!confirm('Gerar um código novo? O link/código antigo deixa de funcionar.')) return;
@@ -1510,6 +1633,19 @@ async function viewGrupo() {
     try { await api(`/groups/${group.id}/members/${b.dataset.grole}`, { method: 'PUT', body: { role: b.dataset.val } }); viewGrupo(); }
     catch (err) { toast(esc(err.message), 'err'); }
   }));
+  // apelido de zoeira (premium): cada um põe o seu ("Mister Zebra 🦓"...);
+  // o dono pode moderar o de qualquer membro
+  app.querySelectorAll('[data-gtitle]').forEach((b) => b.addEventListener('click', async () => {
+    const mine = Number(b.dataset.gtitle) === state.user.id;
+    const title = prompt(mine ? 'Seu apelido no grupo (máx. 24 letras — vazio remove):'
+      : 'Moderar apelido deste membro (vazio remove):', b.dataset.cur || '');
+    if (title === null) return;
+    try {
+      await api(`/groups/${group.id}/members/${b.dataset.gtitle}`, { method: 'PUT', body: { title } });
+      toast(mine ? 'Apelido salvo! 🏷️' : 'Apelido atualizado.');
+      viewGrupo();
+    } catch (err) { toast(esc(err.message), 'err'); }
+  }));
   $('#leaveBtn')?.addEventListener('click', async () => {
     if (!confirm(`Sair do grupo "${group.name}"?`)) return;
     try {
@@ -1522,6 +1658,169 @@ async function viewGrupo() {
   });
 }
 
+// ---------- tela de upsell (recurso premium em grupo free) ----------
+function premiumUpsellView(featureName) {
+  const isAdmin = ['owner', 'admin'].includes(state.group?.my_role);
+  app.innerHTML = `
+    <div class="welcome" style="max-width:480px;margin:0 auto;text-align:center">
+      <div style="font-size:3rem;margin-bottom:8px">⭐</div>
+      <h2 class="page-title" style="text-align:center">${esc(featureName)}</h2>
+      <p class="page-sub" style="text-align:center">Este recurso é exclusivo de grupos premium —
+        junto com participantes ilimitados, logo própria, títulos de zoeira e exportação para Excel.</p>
+      <div class="card premium-card">
+        ${isAdmin
+          ? '<a class="btn gold" href="#/grupo" style="width:100%">⭐ Virar premium — R$ 29,90</a>'
+          : `<p class="muted">Peça ao dono do grupo para ativar o premium. 😉</p>`}
+      </div>
+    </div>`;
+}
+
+// ---------- PALPITES BÔNUS (premium) ----------
+async function viewBonus() {
+  let d;
+  try { d = await gapi('/bonus'); }
+  catch (err) { premiumUpsellView('🎯 Palpites Bônus'); return; }
+
+  const teamSelect = (q) => `
+    <select data-ans="${q.id}">
+      <option value="">Escolha a seleção…</option>
+      ${d.teams.map((t) => `<option value="${esc(t.en)}" ${q.my_answer === t.en ? 'selected' : ''}>${esc(t.pt)}</option>`).join('')}
+    </select>`;
+  const choiceSelect = (q) => `
+    <select data-ans="${q.id}">
+      <option value="">Escolha…</option>
+      ${q.options.map((o) => `<option value="${esc(o)}" ${q.my_answer === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+    </select>`;
+  const textInput = (q) => `<input data-ans="${q.id}" maxlength="60" placeholder="Ex.: Haaland" value="${esc(q.my_answer || '')}">`;
+
+  app.innerHTML = `
+    <h2 class="page-title">🎯 Palpites Bônus</h2>
+    <p class="page-sub">Pontos extras que entram no ranking do grupo · respostas valem em todos os seus grupos premium</p>
+    <div class="match-list" style="max-width:560px">
+      ${d.questions.map((q) => `
+      <div class="card">
+        <div class="match-meta">
+          <span><b style="color:var(--text);font-size:.95rem">${esc(q.question)}</b></span>
+          <span class="badge pts">+${q.points} pts</span>
+        </div>
+        ${q.locked ? `
+          <p style="margin-top:8px">Sua resposta: <b>${esc(q.my_answer_pt || '— não respondeu')}</b>
+            ${q.my_points != null ? `<span class="badge ${q.my_points > 0 ? 'pts' : 'fin'}">${q.my_points > 0 ? '✅ +' + q.my_points : '0'} pts</span>` : ''}
+          </p>
+          ${q.correct_answer ? `<p class="muted">Resposta certa: <b>${esc(q.correct_answer)}</b></p>`
+            : '<p class="muted">🔒 Travado — aguardando o resultado.</p>'}` : `
+          <div class="inline-form" style="margin-top:10px">
+            <div class="field">${q.qtype === 'team' ? teamSelect(q) : q.qtype === 'choice' ? choiceSelect(q) : textInput(q)}</div>
+            <button class="btn small" data-bsave="${q.id}">Salvar</button>
+          </div>
+          <p class="muted" style="font-size:.72rem;margin-top:6px">Trava em ${fmtDate(q.lock_at)}</p>`}
+      </div>`).join('')}
+    </div>`;
+
+  app.querySelectorAll('[data-bsave]').forEach((b) => b.addEventListener('click', async () => {
+    const qid = b.dataset.bsave;
+    const answer = app.querySelector(`[data-ans="${qid}"]`).value.trim();
+    if (!answer) return toast('Escolha ou escreva sua resposta.', 'err');
+    b.disabled = true;
+    try { await gapi(`/bonus/${qid}`, { method: 'POST', body: { answer } }); toast('Palpite bônus salvo! 🎯'); }
+    catch (err) { toast(esc(err.message), 'err'); }
+    b.disabled = false;
+  }));
+}
+
+// ---------- RAIO-X DO GRUPO (premium) ----------
+async function viewRaio() {
+  let d;
+  try { d = await gapi('/stats'); }
+  catch (err) { premiumUpsellView('📊 Raio-X do grupo'); return; }
+  const s = d.stats;
+  if (!s.length) { app.innerHTML = '<div class="card"><p class="muted">Sem dados ainda.</p></div>'; return; }
+
+  const maxBy = (arr, fn, min = 1) => {
+    const best = [...arr].sort((a, b) => fn(b) - fn(a))[0];
+    return best && fn(best) >= min ? best : null;
+  };
+  const awards = [
+    ['🥇 Líder', s[0], `${s[0].total} pts`],
+    ['🎯 Sniper', maxBy(s, (x) => x.exacts), (x) => `${x.exacts} placares exatos`],
+    ['🦓 Rei da Zebra', maxBy(s, (x) => x.zebras), (x) => `${x.zebras} zebra${x.zebras > 1 ? 's' : ''}`],
+    ['📈 Melhor rodada', maxBy(s, (x) => x.bestDayPts), (x) => `${x.bestDayPts} pts em ${fmtDay(x.bestDay)}`],
+    ['❄️ Pé frio', maxBy(s, (x) => x.zeros, 3), (x) => `${x.zeros} palpites zerados`],
+  ];
+
+  app.innerHTML = `
+    <h2 class="page-title">📊 Raio-X do grupo</h2>
+    <p class="page-sub">${esc(state.group.name)} — estatísticas e prêmios da galera</p>
+    <div class="stat-row" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      ${awards.filter(([, u]) => u).map(([label, u, fmt]) => `
+        <div class="stat" style="text-align:center">
+          <div style="margin-bottom:4px">${avatar(u)}</div>
+          <div class="lbl">${label}</div>
+          <div style="font-weight:700;font-size:.85rem">${esc(u.name.split(' ')[0])}</div>
+          <div class="lbl" style="text-transform:none">${typeof fmt === 'function' ? fmt(u) : fmt}</div>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <h3>Corrida pelo título</h3>
+      ${s.some((x) => x.evolution.length) ? '<div class="chart-box" style="height:300px"><canvas id="race"></canvas></div>' : '<p class="muted">O gráfico aparece quando os jogos terminarem.</p>'}
+    </div>
+    <br>
+    <div class="card">
+      <h3>Desempenho de cada um</h3>
+      <div class="table-wrap"><table class="rank">
+        <tr><th>Participante</th><th>Pts</th><th>Exatos</th><th>Taxa de acerto</th><th>Melhor dia</th><th>Zebras</th></tr>
+        ${s.map((x) => `
+          <tr class="${x.id === state.user.id ? 'me' : ''}">
+            <td><div class="user-cell">${avatar(x)}<div>${esc(x.name)}${x.title ? ` <span class="tag gold">${esc(x.title)}</span>` : ''}</div></div></td>
+            <td><b>${x.total}</b></td><td>${x.exacts}</td><td>${x.accuracy}%</td>
+            <td>${x.bestDay ? `${x.bestDayPts} pts (${fmtDay(x.bestDay)})` : '–'}</td><td>${x.zebras}</td>
+          </tr>`).join('')}
+      </table></div>
+    </div>
+    ${d.champions.length ? `<br>
+    <div class="card">
+      <h3>🏆 Campeões das rodadas</h3>
+      <div class="online-list">
+        ${d.champions.map((c) => `
+          <div class="online-item">${avatar(c)}
+            <div>${esc(c.name)}<span class="sec"> · ${fmtDay(c.day)} · ${c.points} pts</span></div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}`;
+
+  // gráfico multi-linhas (top 8 + você)
+  if (typeof Chart !== 'undefined' && s.some((x) => x.evolution.length)) try {
+    const COLORS = ['#117a4b', '#cc0000', '#1d4ed8', '#ea580c', '#7c3aed', '#ca8a04', '#0d9488', '#db2777'];
+    let racers = s.filter((x) => x.evolution.length).slice(0, 8);
+    const me = s.find((x) => x.id === state.user.id);
+    if (me?.evolution.length && !racers.includes(me)) racers = [...racers.slice(0, 7), me];
+    const days = [...new Set(racers.flatMap((x) => x.evolution.map((e) => e.day)))].sort();
+    state.chart?.destroy();
+    state.chart = new Chart($('#race'), {
+      type: 'line',
+      data: {
+        labels: days.map(fmtDay),
+        datasets: racers.map((x, i) => {
+          let last = 0;
+          const byDay = new Map(x.evolution.map((e) => [e.day, e.total]));
+          return {
+            label: x.name.split(' ')[0],
+            data: days.map((day) => (last = byDay.get(day) ?? last)),
+            borderColor: COLORS[i % COLORS.length],
+            backgroundColor: COLORS[i % COLORS.length],
+            tension: .25, pointRadius: 2.5,
+          };
+        }),
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      },
+    });
+  } catch (e) { console.warn('[chart]', e); }
+}
+
 // ------------------------------------------------------------ roteador
 const routes = {
   login: () => viewAuth('login'),
@@ -1531,6 +1830,8 @@ const routes = {
   novogrupo: viewNovoGrupo,
   entrar: viewEntrar,
   grupo: viewGrupo,
+  bonus: viewBonus,
+  raio: viewRaio,
   dashboard: viewDashboard,
   jogos: viewJogos,
   ranking: viewRanking,
@@ -1540,7 +1841,7 @@ const routes = {
 };
 
 // Telas que só fazem sentido dentro de um grupo ativo
-const NEEDS_GROUP = ['dashboard', 'jogos', 'ranking', 'chat', 'grupo'];
+const NEEDS_GROUP = ['dashboard', 'jogos', 'ranking', 'chat', 'grupo', 'bonus', 'raio'];
 
 async function route() {
   const segs = (location.hash.replace('#/', '') || 'dashboard').split('/');

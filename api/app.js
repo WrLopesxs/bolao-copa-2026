@@ -10,7 +10,8 @@ const { ensureReady } = require('../database/data');
 const routes = require('./routes');
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+// rawBody é necessário para verificar a assinatura do webhook da Stripe
+app.use(express.json({ limit: '1mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // Garante schema + jogos carregados antes de qualquer rota da API
 app.use('/api', (req, res, next) => {

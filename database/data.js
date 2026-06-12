@@ -169,10 +169,58 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- palpites bônus (campeão, artilheiro etc.) — perguntas da plataforma;
+-- a resposta é global por usuário, mas os pontos só contam em grupo premium
+CREATE TABLE IF NOT EXISTS bonus_questions (
+  id             SERIAL PRIMARY KEY,
+  competition_id INTEGER NOT NULL DEFAULT 1,
+  qkey           TEXT UNIQUE NOT NULL,
+  question       TEXT NOT NULL,
+  qtype          TEXT NOT NULL,          -- team | choice | text
+  options        TEXT DEFAULT '',        -- JSON (para qtype choice)
+  points         INTEGER NOT NULL,
+  lock_at        TIMESTAMPTZ NOT NULL,
+  correct_answer TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bonus_answers (
+  question_id INTEGER NOT NULL REFERENCES bonus_questions(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  answer      TEXT NOT NULL,
+  points      INTEGER,
+  updated_at  TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (question_id, user_id)
+);
+
+-- campeão da rodada (grupos premium): um vencedor por dia de jogos
+CREATE TABLE IF NOT EXISTS round_champions (
+  group_id  INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  day       DATE NOT NULL,
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  points    INTEGER NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (group_id, day)
+);
+
+-- pagamentos confirmados (premium por grupo); session_id único evita duplicar
+CREATE TABLE IF NOT EXISTS payments (
+  id          SERIAL PRIMARY KEY,
+  group_id    INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  user_id     INTEGER,
+  session_id  TEXT UNIQUE NOT NULL,
+  amount      INTEGER NOT NULL,      -- em centavos
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+
 -- colunas novas em tabelas antigas (no-op quando já existem;
 -- precisa vir depois dos CREATEs, que rodam na ordem do arquivo)
 ALTER TABLE matches       ADD COLUMN IF NOT EXISTS competition_id INTEGER;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS group_id INTEGER;
+ALTER TABLE group_members ADD COLUMN IF NOT EXISTS title TEXT DEFAULT '';
+-- pontuação personalizada do grupo (premium); NULL = regra padrão 10/5/2
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS points_exact   INTEGER;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS points_outcome INTEGER;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS points_goals   INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_pred_match ON predictions(match_id);
 CREATE INDEX IF NOT EXISTS idx_pred_user  ON predictions(user_id);
@@ -227,6 +275,26 @@ async function migrateToGroups() {
   await run(`SELECT setval('groups_id_seq', GREATEST((SELECT COALESCE(MAX(id),0) FROM groups), 1),
                     EXISTS(SELECT 1 FROM groups))`);
   await run(`UPDATE chat_messages SET group_id = 1 WHERE group_id IS NULL`);
+  await seedBonusQuestions();
+}
+
+/** Perguntas bônus da Copa 2026 (travam antes do mata-mata começar). */
+async function seedBonusQuestions() {
+  const LOCK = '2026-06-28T00:00:00Z'; // véspera do mata-mata
+  const QUESTIONS = [
+    ['campeao',    'Quem será o campeão da Copa?',    'team',   '', 25],
+    ['vice',       'Quem será o vice-campeão?',       'team',   '', 15],
+    ['artilheiro', 'Quem será o artilheiro da Copa?', 'text',   '', 20],
+    ['brasil',     'Até onde o Brasil vai?',          'choice',
+      JSON.stringify(['Fase de Grupos', '16 avos', 'Oitavas', 'Quartas', 'Semifinal', 'Vice', 'Campeão']), 15],
+  ];
+  for (const [qkey, question, qtype, options, points] of QUESTIONS) {
+    await run(
+      `INSERT INTO bonus_questions (competition_id, qkey, question, qtype, options, points, lock_at)
+       VALUES (1, $1, $2, $3, $4, $5, $6) ON CONFLICT (qkey) DO NOTHING`,
+      [qkey, question, qtype, options, points, LOCK]
+    );
+  }
 }
 
 // Garante schema + jogos carregados. Memoizado (roda uma vez por processo).

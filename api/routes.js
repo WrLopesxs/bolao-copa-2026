@@ -11,12 +11,15 @@ const { calcPoints, scoreMatch, rescoreAll, getRanking, POINTS } = require('../b
 const { syncResults, syncIfStale } = require('./football-api');
 const { getVapid, saveSubscription, sendPush } = require('./push');
 
-const { h, isLocked, publicMatch, validScore, lc, rateLimit } = require('./helpers');
+const { h, isLocked, publicMatch, validScore, lc, normTxt, rateLimit } = require('./helpers');
+const teams = require('../database/teams.json');
 
 const router = express.Router();
 
 // Multi-tenant: grupos, convites e rotas escopadas por grupo
 router.use(require('./groups'));
+// Pagamentos (premium por grupo via Stripe)
+router.use(require('./billing'));
 
 // ======================================================== AUTENTICAÇÃO
 router.post('/auth/register', rateLimit(10, 5 * 60_000), h(async (req, res) => {
@@ -198,20 +201,20 @@ router.post('/admin/predictions', requireAdmin, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// O placar NÃO é editável nem pelo admin da plataforma (transparência com os
+// grupos): resultados entram apenas pela sincronização automática (ESPN/API).
 router.put('/admin/matches/:id', requireAdmin, h(async (req, res) => {
   const id = Number(req.params.id);
   const match = await get('SELECT * FROM matches WHERE id = $1', [id]);
   if (!match) return res.status(404).json({ error: 'Jogo não encontrado.' });
   const b = req.body || {};
-  const home_score = b.home_score === '' || b.home_score == null ? null : validScore(b.home_score);
-  const away_score = b.away_score === '' || b.away_score == null ? null : validScore(b.away_score);
   const status = ['scheduled', 'live', 'finished'].includes(b.status) ? b.status : match.status;
   const lock_mode = ['auto', 'open', 'locked'].includes(b.lock_mode) ? b.lock_mode : match.lock_mode;
   await run(`
     UPDATE matches SET home_team=COALESCE($1,home_team), away_team=COALESCE($2,away_team),
-      date_utc=COALESCE($3,date_utc), home_score=$4, away_score=$5, status=$6, lock_mode=$7
-    WHERE id=$8`,
-    [b.home_team || null, b.away_team || null, b.date_utc || null, home_score, away_score, status, lock_mode, id]);
+      date_utc=COALESCE($3,date_utc), status=$4, lock_mode=$5
+    WHERE id=$6`,
+    [b.home_team || null, b.away_team || null, b.date_utc || null, status, lock_mode, id]);
   await rescoreAll();
   res.json({ ok: true });
 }));
@@ -243,6 +246,41 @@ router.post('/admin/push-test', requireAdmin, h(async (req, res) => {
     await sendPush(id, payload);
   }
   res.json({ ok: true, users: ids.length, devices });
+}));
+
+// -------- palpites bônus: ver respostas e definir o gabarito (pontua na hora)
+router.get('/admin/bonus', requireAdmin, h(async (req, res) => {
+  const questions = await all('SELECT * FROM bonus_questions ORDER BY id');
+  const answers = await all(`
+    SELECT question_id, answer, COUNT(*)::int AS n
+      FROM bonus_answers GROUP BY question_id, answer ORDER BY n DESC, answer`);
+  res.json({
+    questions: questions.map((q) => ({
+      ...q, lock_at: q.lock_at instanceof Date ? q.lock_at.toISOString() : q.lock_at,
+      options: q.options ? JSON.parse(q.options) : null,
+    })),
+    answers,
+    teams: Object.entries(teams).map(([en, v]) => ({ en, pt: v.pt })).sort((a, b) => a.pt.localeCompare(b.pt, 'pt')),
+  });
+}));
+
+router.put('/admin/bonus/:id', requireAdmin, h(async (req, res) => {
+  const q = await get('SELECT * FROM bonus_questions WHERE id = $1', [Number(req.params.id)]);
+  if (!q) return res.status(404).json({ error: 'Pergunta não encontrada.' });
+  const ans = String(req.body?.correct_answer || '').trim();
+  await run('UPDATE bonus_questions SET correct_answer = $1 WHERE id = $2', [ans || null, q.id]);
+  if (!ans) { // gabarito removido: despontua
+    await run('UPDATE bonus_answers SET points = NULL WHERE question_id = $1', [q.id]);
+    return res.json({ ok: true, scored: 0 });
+  }
+  // team/choice: igualdade exata; texto: comparação sem acento/caixa
+  const rows = await all('SELECT user_id, answer FROM bonus_answers WHERE question_id = $1', [q.id]);
+  for (const r of rows) {
+    const hit = q.qtype === 'text' ? normTxt(r.answer) === normTxt(ans) : r.answer === ans;
+    await run('UPDATE bonus_answers SET points = $1 WHERE question_id = $2 AND user_id = $3',
+      [hit ? q.points : 0, q.id, r.user_id]);
+  }
+  res.json({ ok: true, scored: rows.length });
 }));
 
 router.post('/admin/sync', requireAdmin, h(async (req, res) => {
