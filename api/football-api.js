@@ -64,24 +64,61 @@ function findLocalMatch(fx, locals) {
 async function syncResults() {
   let changed = await syncFromApiFootball();
   if (await syncFromESPN()) changed = true;
+  // failsafe: pontua jogos encerrados cujos palpites ficaram sem pontos
+  // (ex.: a virada para "encerrado" aconteceu numa sync que falhou no meio)
+  if (await scoreUnscored()) changed = true;
   return changed;
+}
+
+/** Vassoura: qualquer jogo encerrado com palpite sem pontos é (re)pontuado. */
+async function scoreUnscored() {
+  const rows = await all(`
+    SELECT DISTINCT m.id FROM matches m
+      JOIN predictions p ON p.match_id = m.id
+     WHERE m.status = 'finished'
+       AND m.home_score IS NOT NULL AND m.away_score IS NOT NULL
+       AND p.points IS NULL`);
+  for (const r of rows) {
+    console.log(`[pontuação] Failsafe pontuando o jogo #${r.id}`);
+    await scoreMatch(r.id);
+  }
+  return rows.length > 0;
 }
 
 /** Placar ao vivo via ESPN (grátis). Atualiza só jogos em andamento/encerrados. */
 async function syncFromESPN() {
-  let data;
-  try {
-    const res = await fetch(ESPN_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    data = await res.json();
-  } catch (err) {
-    console.error('[ESPN] Falha ao buscar:', err.message);
-    return false;
+  // O scoreboard padrão da ESPN só lista os jogos "de hoje" (no fuso dos EUA):
+  // um jogo de madrugada UTC fica agrupado no dia ANTERIOR, e jogos de ontem
+  // somem da lista — deixando partidas presas em "ao vivo". Por isso buscamos
+  // POR DATA (hoje + dias de jogos pendentes), sempre incluindo o dia anterior.
+  const pending = await all(`
+    SELECT DISTINCT (date_utc AT TIME ZONE 'UTC')::date AS day FROM matches
+     WHERE status = 'live'
+        OR (status = 'scheduled' AND date_utc <= now() AND date_utc > now() - interval '12 hours')`);
+  const days = new Set();
+  const addDay = (d) => {
+    const iso = (d instanceof Date ? d.toISOString() : String(d)).slice(0, 10);
+    const t = new Date(iso + 'T00:00:00Z').getTime();
+    days.add(iso.replace(/-/g, ''));
+    days.add(new Date(t - 86_400_000).toISOString().slice(0, 10).replace(/-/g, ''));
+  };
+  pending.forEach((r) => addDay(r.day));
+  addDay(new Date());
+
+  const events = [];
+  for (const day of days) {
+    try {
+      const res = await fetch(`${ESPN_URL}?dates=${day}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      events.push(...((await res.json()).events || []));
+    } catch (err) {
+      console.error(`[ESPN] Falha ao buscar ${day}:`, err.message);
+    }
   }
 
   const locals = await all('SELECT * FROM matches');
   let changed = false;
-  for (const ev of data.events || []) {
+  for (const ev of events) {
     const comp = ev.competitions?.[0];
     const hc = comp?.competitors?.find((c) => c.homeAway === 'home');
     const ac = comp?.competitors?.find((c) => c.homeAway === 'away');
