@@ -12,7 +12,7 @@ const { get, all, run, genInviteCode } = require('../database/data');
 const { requireAuth } = require('../backend/auth');
 const { getRanking, POINTS } = require('../backend/scoring');
 const { sendPush } = require('./push');
-const { syncIfStale } = require('./football-api');
+const { syncIfStale, scoreUnscored } = require('./football-api');
 const { h, isLocked, publicMatch, rateLimit } = require('./helpers');
 const teams = require('../database/teams.json');
 
@@ -309,6 +309,9 @@ router.get('/groups/:gid/ranking', requireAuth, requireMember, h(async (req, res
 
 router.get('/groups/:gid/dashboard', requireAuth, requireMember, h(async (req, res) => {
   syncIfStale(); // dispara sync de resultados em background
+  // rede de segurança: pontua na hora qualquer jogo encerrado que tenha
+  // ficado com palpites em branco (ex.: falha parcial numa pontuação anterior)
+  await scoreUnscored().catch((e) => console.error('[failsafe]', e.message));
   const premium = req.group.plan === 'premium';
   if (premium) await ensureRoundChampions(req.group).catch((e) => console.error('[rodada]', e.message));
   const ranking = await getRanking(null, req.group);

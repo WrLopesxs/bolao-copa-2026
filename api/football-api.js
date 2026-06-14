@@ -228,4 +228,4 @@ async function syncIfStale() {
   }
 }
 
-module.exports = { syncResults, syncIfStale };
+module.exports = { syncResults, syncIfStale, scoreUnscored };

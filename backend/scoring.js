@@ -30,17 +30,27 @@ async function scoreMatch(matchId) {
 
   const preds = await all('SELECT * FROM predictions WHERE match_id = $1', [matchId]);
   const results = [];
+  let failed = 0;
+  // Cada palpite é pontuado de forma isolada: se o banco engasgar numa linha
+  // (o Neon grátis "acorda" com latência), os outros continuam sendo pontuados.
+  // O que falhar fica com points NULL e o failsafe (scoreUnscored) refaz depois.
   for (const p of preds) {
-    const pts = calcPoints(match.home_score, match.away_score, p.home_pred, p.away_pred);
-    const delta = pts - (p.points || 0);
-    await run('UPDATE predictions SET points = $1 WHERE id = $2', [pts, p.id]);
-    await run(
-      `INSERT INTO score_history (user_id, match_id, points) VALUES ($1,$2,$3)
-       ON CONFLICT (user_id, match_id) DO UPDATE SET points = excluded.points`,
-      [p.user_id, matchId, pts]
-    );
-    results.push({ user_id: p.user_id, points: pts, delta });
+    try {
+      const pts = calcPoints(match.home_score, match.away_score, p.home_pred, p.away_pred);
+      const delta = pts - (p.points || 0);
+      await run('UPDATE predictions SET points = $1 WHERE id = $2', [pts, p.id]);
+      await run(
+        `INSERT INTO score_history (user_id, match_id, points) VALUES ($1,$2,$3)
+         ON CONFLICT (user_id, match_id) DO UPDATE SET points = excluded.points`,
+        [p.user_id, matchId, pts]
+      );
+      results.push({ user_id: p.user_id, points: pts, delta });
+    } catch (e) {
+      failed++;
+      console.error(`[pontuação] falha no palpite #${p.id} (jogo ${matchId}):`, e.message);
+    }
   }
+  if (failed) console.error(`[pontuação] jogo ${matchId}: ${failed} palpite(s) ficaram para o failsafe.`);
 
   // Notifica no celular quem acabou de ganhar pontos (delta > 0 evita
   // reenvio quando o rescoreAll repassa jogos já pontuados)
