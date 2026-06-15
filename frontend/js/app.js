@@ -655,11 +655,15 @@ function updateCountdowns() {
   });
 }
 
-// Jogo rolando agora (ao vivo, ou agendado que passou do horário há menos de 3h)
+// Jogo rolando agora: ao vivo, ou agendado que passou do horário há menos de 4h.
+// 4h cobre até o mata-mata (prorrogação + pênaltis ~2h45); passado isso o jogo
+// acabou, mesmo que a fonte ainda não tenha mandado o resultado — então não
+// pode mais ser tratado como "em andamento".
+const ONGOING_WINDOW_MS = 4 * 3600_000;
 function isOngoing(m, now = Date.now()) {
   if (m.status === 'live') return true;
   const start = new Date(m.date_utc).getTime();
-  return m.status === 'scheduled' && now >= start && now < start + 3 * 3600_000;
+  return m.status === 'scheduled' && now >= start && now < start + ONGOING_WINDOW_MS;
 }
 
 // Busca o placar mais novo e atualiza os cards na tela, sem re-renderizar
@@ -710,7 +714,9 @@ async function viewJogos() {
     const editable = open && !confirmed;
     // Jogo que já começou (mesmo que o sync ainda não tenha marcado "ao vivo")
     const started = m.status !== 'scheduled' || now >= new Date(m.date_utc).getTime();
-    const emAndamento = m.status === 'live' || (m.status === 'scheduled' && started && locked);
+    // "Em andamento" só dentro da janela do jogo: um agendado sem resultado que
+    // já passou da janela (ex.: a fonte não casou o nome) não fica preso aqui.
+    const emAndamento = m.status === 'live' || (m.status === 'scheduled' && locked && isOngoing(m, now));
     return `
     <div class="match-card" data-id="${m.id}">
       <div class="match-meta">

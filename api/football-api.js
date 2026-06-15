@@ -27,7 +27,7 @@ const STALE_LIVE_HOURS = Number(process.env.STALE_LIVE_HOURS || 4);
 
 const ALIASES = {
   'south korea': 'korea republic', 'iran': 'ir iran', 'turkey': 'turkiye',
-  'ivory coast': 'cote divoire', 'dr congo': 'congo dr', 'czech republic': 'czechia',
+  'ivory coast': 'cote d ivoire', 'dr congo': 'congo dr', 'czech republic': 'czechia',
   'cape verde islands': 'cabo verde', 'cape verde': 'cabo verde', 'holland': 'netherlands',
   // nomes da ESPN diferentes dos nossos (já normalizados, sem "and"/pontuação)
   'united states': 'usa', 'usmnt': 'usa',
@@ -123,10 +123,14 @@ async function syncFromESPN() {
   // um jogo de madrugada UTC fica agrupado no dia ANTERIOR, e jogos de ontem
   // somem da lista — deixando partidas presas em "ao vivo". Por isso buscamos
   // POR DATA (hoje + dias de jogos pendentes), sempre incluindo o dia anterior.
+  // Inclui também jogos agendados que já começaram mas seguem SEM placar (até 3
+  // dias): cobre o caso de a fonte não ter casado o nome na primeira tentativa —
+  // numa sync seguinte (ex.: alias corrigido) o resultado é finalmente buscado.
   const pending = await all(`
     SELECT DISTINCT (date_utc AT TIME ZONE 'UTC')::date AS day FROM matches
      WHERE status = 'live'
-        OR (status = 'scheduled' AND date_utc <= now() AND date_utc > now() - interval '12 hours')`);
+        OR (status = 'scheduled' AND home_score IS NULL
+            AND date_utc <= now() AND date_utc > now() - interval '3 days')`);
   const days = new Set();
   const addDay = (d) => {
     const iso = (d instanceof Date ? d.toISOString() : String(d)).slice(0, 10);
