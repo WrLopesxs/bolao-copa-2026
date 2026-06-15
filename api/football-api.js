@@ -20,6 +20,10 @@ const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 15 * 60_000); //
 // Durante um jogo a sync acelera para o placar ao vivo não atrasar.
 // Atenção à cota grátis da API-Football (100 req/dia): 3 min cobre bem 1-3 jogos/dia.
 const LIVE_SYNC_INTERVAL_MS = Number(process.env.LIVE_SYNC_INTERVAL_MS || 3 * 60_000); // 3 min
+// Tempo máximo que um jogo pode ficar "ao vivo": nem o mata-mata (prorrogação +
+// pênaltis) passa de ~2h45. Passado isso, o jogo terminou — mesmo que a fonte
+// (ESPN/API-Football) tenha parado de listá-lo e não o virou para "encerrado".
+const STALE_LIVE_HOURS = Number(process.env.STALE_LIVE_HOURS || 4);
 
 const ALIASES = {
   'south korea': 'korea republic', 'iran': 'ir iran', 'turkey': 'turkiye',
@@ -72,10 +76,30 @@ function findLocalMatch(fx, locals) {
 async function syncResults() {
   let changed = await syncFromApiFootball();
   if (await syncFromESPN()) changed = true;
+  // failsafe: encerra jogos que ficaram presos em "ao vivo" muito além do fim
+  // (a fonte parou de listá-los ou o nome não casou, e nunca os virou)
+  if (await finalizeStaleLive()) changed = true;
   // failsafe: pontua jogos encerrados cujos palpites ficaram sem pontos
   // (ex.: a virada para "encerrado" aconteceu numa sync que falhou no meio)
   if (await scoreUnscored()) changed = true;
   return changed;
+}
+
+/** Vassoura: jogo ainda "ao vivo" muito depois do início é forçado a encerrar.
+ *  Independe da fonte voltar a listar o evento — resolve o jogo "preso ao vivo".
+ *  Se já houver placar, pontua; sem placar, ao menos sai do "ao vivo". */
+async function finalizeStaleLive() {
+  const rows = await all(
+    `SELECT id, home_score, away_score FROM matches
+      WHERE status = 'live'
+        AND date_utc < now() - make_interval(hours => $1::int)`,
+    [STALE_LIVE_HOURS]);
+  for (const m of rows) {
+    console.log(`[ESPN] Failsafe: encerrando jogo #${m.id} preso em "ao vivo".`);
+    await run(`UPDATE matches SET status = 'finished' WHERE id = $1`, [m.id]);
+    if (m.home_score !== null && m.away_score !== null) await scoreMatch(m.id);
+  }
+  return rows.length > 0;
 }
 
 /** Vassoura: qualquer jogo encerrado com palpite sem pontos é (re)pontuado. */
@@ -228,4 +252,4 @@ async function syncIfStale() {
   }
 }
 
-module.exports = { syncResults, syncIfStale, scoreUnscored };
+module.exports = { syncResults, syncIfStale, scoreUnscored, finalizeStaleLive };
