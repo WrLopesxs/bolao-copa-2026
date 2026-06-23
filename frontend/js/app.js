@@ -684,7 +684,7 @@ async function refreshLiveScores() {
   } catch {} // rede falhou: tenta no próximo ciclo
 }
 
-async function viewJogos() {
+async function viewJogos(autoScroll = false) {
   const { matches } = await api('/matches');
   state.matches = matches;
   const f = state.filter;
@@ -698,6 +698,11 @@ async function viewJogos() {
     if (Object.keys(STAGES).includes(f)) return m.stage === f;
     return true;
   });
+
+  // Jogos encerrados vão para o fim da lista; o resto segue em ordem de data.
+  list.sort((a, b) =>
+    (a.status === 'finished' ? 1 : 0) - (b.status === 'finished' ? 1 : 0) ||
+    new Date(a.date_utc) - new Date(b.date_utc));
 
   const chips = [
     ['todos', 'Todos'], ['abertos', 'Abertos'], ['futuros', 'Futuros'],
@@ -774,7 +779,7 @@ async function viewJogos() {
     ${editableCount > 1 ? `<div class="save-all-bar"><button class="btn" id="save-all">Salvar todos os palpites</button></div>` : ''}`;
 
   app.querySelectorAll('[data-f]').forEach(b =>
-    b.addEventListener('click', () => { state.filter = b.dataset.f; viewJogos(); }));
+    b.addEventListener('click', () => { state.filter = b.dataset.f; window.scrollTo({ top: 0 }); viewJogos(); }));
 
   app.querySelectorAll('[data-save]').forEach(b => b.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -788,7 +793,8 @@ async function viewJogos() {
       await api('/predictions', { method: 'POST', body: { match_id: id, home, away } });
       editingMatches.delete(id);
       toast('Palpite salvo!');
-      viewJogos(); // re-renderiza: o palpite confirmado aparece bloqueado com botão "Editar"
+      // re-renderiza e já avança para o próximo jogo a palpitar (dá sequência)
+      viewJogos(true);
       return;
     } catch (err) { toast(esc(err.message), 'err'); }
     b.disabled = false;
@@ -831,6 +837,16 @@ async function viewJogos() {
   app.querySelectorAll('.score-box input').forEach(i => i.addEventListener('click', e => e.stopPropagation()));
   bindCompare();
   updateCountdowns();
+
+  // Ao abrir a aba, rola até o próximo jogo a palpitar (continua de onde parou):
+  // o primeiro jogo aberto e ainda sem palpite. Só na abertura — não atrapalha
+  // as atualizações automáticas nem quem está digitando.
+  if (autoScroll) {
+    const next = list.find(m => !isLockedNow(m, now) && m.status === 'scheduled' && !m.my_prediction);
+    const el = next && app.querySelector(`.match-card[data-id="${next.id}"]`);
+    if (el) requestAnimationFrame(() =>
+      window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 70, behavior: 'smooth' }));
+  }
 
   // Quando o horário de bloqueio chega, re-renderiza para o botão "Editar" sumir
   // sem precisar recarregar a página (não roda se o usuário estiver digitando um placar).
@@ -1918,7 +1934,7 @@ const routes = {
   bonus: viewBonus,
   raio: viewRaio,
   dashboard: viewDashboard,
-  jogos: viewJogos,
+  jogos: () => viewJogos(true), // ao abrir a aba, rola até o próximo a palpitar
   ranking: viewRanking,
   chat: viewChat,
   perfil: viewPerfil,
