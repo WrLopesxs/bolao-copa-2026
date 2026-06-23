@@ -355,6 +355,9 @@ router.get('/groups/:gid/dashboard', requireAuth, requireMember, h(async (req, r
 
 // Comparação de palpites: só os palpites de quem é do grupo
 router.get('/groups/:gid/matches/:mid/predictions', requireAuth, requireMember, h(async (req, res) => {
+  // garante que jogos encerrados estejam pontuados antes de mostrar a comparação
+  // (o "–" some na hora se algum palpite tinha ficado órfão)
+  await scoreUnscored().catch((e) => console.error('[failsafe]', e.message));
   const match = await get('SELECT * FROM matches WHERE id = $1', [Number(req.params.mid)]);
   if (!match) return res.status(404).json({ error: 'Jogo não encontrado.' });
   const locked = isLocked(match);

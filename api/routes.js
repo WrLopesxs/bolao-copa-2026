@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const { get, all, run, getSetting, setSetting } = require('../database/data');
 const { hashPassword, verifyPassword, createToken, requireAuth, requireAdmin } = require('../backend/auth');
 const { calcPoints, scoreMatch, rescoreAll, getRanking, POINTS } = require('../backend/scoring');
-const { syncResults, syncIfStale } = require('./football-api');
+const { syncResults, syncIfStale, scoreUnscored } = require('./football-api');
 const { getVapid, saveSubscription, sendPush } = require('./push');
 
 const { h, isLocked, publicMatch, validScore, lc, normTxt, rateLimit } = require('./helpers');
@@ -105,6 +105,8 @@ router.post('/heartbeat', requireAuth, h(async (req, res) => {
 // ============================================================== JOGOS
 router.get('/matches', requireAuth, h(async (req, res) => {
   syncIfStale(); // com jogo rolando, quem está na tela de palpites também puxa o placar
+  // failsafe: pontua na hora qualquer jogo encerrado com palpite órfão
+  await scoreUnscored().catch((e) => console.error('[failsafe]', e.message));
   const matches = await all('SELECT * FROM matches ORDER BY date_utc ASC, id ASC');
   const preds = await all('SELECT * FROM predictions WHERE user_id = $1', [req.user.id]);
   const byMatch = new Map(preds.map((p) => [p.match_id, p]));
