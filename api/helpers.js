@@ -16,13 +16,38 @@ function isLocked(match, now = Date.now()) {
   return now >= new Date(match.date_utc).getTime() - LOCK_BEFORE_MS;
 }
 
+/**
+ * Nome amigável do time. Se for um time real (teams.json), devolve o nome em PT.
+ * Senão, traduz os placeholders de mata-mata da ESPN e os nossos códigos
+ * ("2J", "3ABCDF") para um rótulo claro em português ("2º do Grupo J").
+ */
+function prettyTeam(name) {
+  if (teams[name]) return teams[name].pt;
+  const s = String(name || '').trim();
+  const ORD = { '1': '1º', '2': '2º', '3': '3º', '4': '4º', first: '1º', second: '2º', third: '3º', fourth: '4º' };
+  let m;
+  // ESPN: "Group J 2nd Place"
+  if ((m = s.match(/^Group ([A-L]) (\d)(?:st|nd|rd|th)? Place$/i))) return `${ORD[m[2]]} do Grupo ${m[1].toUpperCase()}`;
+  // ESPN: "Third Place Group E/F/G/I/J" / "2nd Place Group ..."
+  if ((m = s.match(/^(\d{1,2}|First|Second|Third|Fourth)(?:st|nd|rd|th)? Place Group ([A-L/]+)$/i)))
+    return `${ORD[m[1].toLowerCase()] || ORD[m[1]] || m[1]} colocado (Grupos ${m[2].toUpperCase()})`;
+  // ESPN: "Winner Match 73" / "Runner-Up Match 73"
+  if ((m = s.match(/^Winner(?:s)? Match (\d+)$/i))) return `Vencedor do jogo ${m[1]}`;
+  if ((m = s.match(/^(?:Runner-?Up|Loser) Match (\d+)$/i))) return `Perdedor do jogo ${m[1]}`;
+  // nossos códigos: "2J" (posição+grupo) e "3ABCDF" (melhor 3º entre grupos)
+  if ((m = s.match(/^([1-4])([A-L])$/))) return `${ORD[m[1]]} do Grupo ${m[2]}`;
+  if ((m = s.match(/^([1-4])([A-L]{2,})$/))) return `${ORD[m[1]]} colocado (${m[2].split('').join('/')})`;
+  if (/^a definir$/i.test(s)) return 'A definir';
+  return s;
+}
+
 function publicMatch(m) {
   const t = (name) => teams[name] || null;
   const iso = m.date_utc instanceof Date ? m.date_utc.toISOString() : m.date_utc;
   return {
     ...m, date_utc: iso, locked: isLocked(m),
-    home_pt: t(m.home_team)?.pt || m.home_team,
-    away_pt: t(m.away_team)?.pt || m.away_team,
+    home_pt: prettyTeam(m.home_team),
+    away_pt: prettyTeam(m.away_team),
     home_flag: t(m.home_team)?.code || null,
     away_flag: t(m.away_team)?.code || null,
   };
