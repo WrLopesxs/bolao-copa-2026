@@ -11,6 +11,7 @@
  */
 const { all, run, get, getSetting, setSetting } = require('../database/data');
 const { scoreMatch } = require('../backend/scoring');
+const teams = require('../database/teams.json');
 
 const API_URL = 'https://v3.football.api-sports.io/fixtures?league=1&season=2026';
 // Fonte gratuita de placar (API pública da ESPN): sem chave e sem cota.
@@ -42,6 +43,14 @@ function normalize(name) {
     .replace(/\s+/g, ' ').trim();
   return ALIASES[n] || n;
 }
+// Converte o nome da fonte (ESPN) para a nossa chave de teams.json, para vir
+// bandeira e nome em português (ex.: "Ivory Coast" -> "Côte d'Ivoire").
+const TEAM_KEYS = Object.keys(teams);
+function canonicalTeam(name) {
+  const n = normalize(name);
+  return TEAM_KEYS.find((k) => normalize(k) === n) || name;
+}
+
 async function apiKey() {
   return process.env.API_FOOTBALL_KEY || await getSetting('api_football_key', '');
 }
@@ -130,7 +139,11 @@ async function syncFromESPN() {
     SELECT DISTINCT (date_utc AT TIME ZONE 'UTC')::date AS day FROM matches
      WHERE status = 'live'
         OR (status = 'scheduled' AND home_score IS NULL
-            AND date_utc <= now() AND date_utc > now() - interval '3 days')`);
+            AND date_utc <= now() AND date_utc > now() - interval '3 days')
+        -- jogos futuros do mata-mata ainda com placeholder ("2A", "A definir"):
+        -- busca o chaveamento com antecedência para liberar os palpites
+        OR (status = 'scheduled' AND date_utc > now() AND date_utc < now() + interval '8 days'
+            AND (home_team ~ '^[123][A-L]+$' OR home_team = 'A definir'))`);
   const days = new Set();
   const addDay = (d) => {
     const iso = (d instanceof Date ? d.toISOString() : String(d)).slice(0, 10);
@@ -170,18 +183,28 @@ async function syncFromESPN() {
 
     const state = ev.status?.type?.state; // pre | in | post
     const status = state === 'post' ? 'finished' : state === 'in' ? 'live' : 'scheduled';
-    if (status === 'scheduled') continue; // antes da bola rolar não há o que atualizar
+    const isPh = local.home_team === 'A definir' || /^[123][A-L]+$/.test(local.home_team);
+    const home = canonicalTeam(hc.team.name), away = canonicalTeam(ac.team.name);
+
+    // Jogo ainda não começou: só preenche os times do mata-mata (placeholder
+    // "2A" -> "South Africa") para liberar os palpites ANTES do bloqueio.
+    if (status === 'scheduled') {
+      if (isPh && (local.home_team !== home || local.away_team !== away)) {
+        await run(`UPDATE matches SET home_team=$1, away_team=$2 WHERE id=$3`, [home, away, local.id]);
+        changed = true;
+      }
+      continue;
+    }
     const hs = hc.score === '' || hc.score == null ? null : Number(hc.score);
     const as = ac.score === '' || ac.score == null ? null : Number(ac.score);
-    if (local.status === status && local.home_score === hs && local.away_score === as) continue;
+    if (local.status === status && local.home_score === hs && local.away_score === as && !isPh) continue;
 
-    const isPh = local.home_team === 'A definir' || /^[123][A-L]+$/.test(local.home_team);
     await run(
       `UPDATE matches SET home_score=$1, away_score=$2, status=$3,
          home_team = CASE WHEN $6 THEN $4 ELSE home_team END,
          away_team = CASE WHEN $6 THEN $5 ELSE away_team END
        WHERE id=$7`,
-      [hs, as, status, hc.team.name, ac.team.name, isPh, local.id]);
+      [hs, as, status, home, away, isPh, local.id]);
     changed = true;
     if (status === 'finished' && hs !== null && as !== null) await scoreMatch(local.id);
   }
