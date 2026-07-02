@@ -50,6 +50,19 @@ function canonicalTeam(name) {
   const n = normalize(name);
   return TEAM_KEYS.find((k) => normalize(k) === n) || name;
 }
+// Time "de verdade" é o que consta em teams.json. Tudo o mais é placeholder:
+// os nossos códigos ("2A", "3ABCDF", "A definir") E os nomes provisórios que a
+// própria ESPN publica antes da definição ("Group J 2nd Place", "Round of 32
+// 1 Winner") — que também acabam gravados no banco pela sync.
+function isRealTeam(name) {
+  const n = normalize(name);
+  return TEAM_KEYS.some((k) => normalize(k) === n);
+}
+// Placeholder em QUALQUER lado conta: a ESPN pode conhecer um time e o outro
+// não (ex.: "Spain vs Group J 2nd Place") — o jogo segue pendente até os dois.
+function isPlaceholder(m) {
+  return !isRealTeam(m.home_team) || !isRealTeam(m.away_team);
+}
 
 async function apiKey() {
   return process.env.API_FOOTBALL_KEY || await getSetting('api_football_key', '');
@@ -75,8 +88,7 @@ function findLocalMatch(fx, locals) {
   // (nos 16 avos o jogo 79 saiu 1h depois do previsto e ficava sem vínculo);
   // como os jogos vizinhos distam 3h30 ou mais, 2h não gera ambiguidade.
   const kickoff = new Date(fx.fixture.date).getTime();
-  let ph = locals.filter((c) => !c.api_fixture_id &&
-    (c.home_team === 'A definir' || /^[123][A-L]+$/.test(c.home_team)) &&
+  let ph = locals.filter((c) => !c.api_fixture_id && isPlaceholder(c) &&
     Math.abs(new Date(c.date_utc).getTime() - kickoff) < 2 * 60 * 60 * 1000);
   // mais de um candidato no horário: desempata pela cidade do estádio
   if (ph.length > 1 && fx.fixture.venue?.city) {
@@ -143,14 +155,14 @@ async function syncFromESPN() {
   // tentativa — numa sync seguinte (ex.: alias/tolerância corrigidos) o resultado
   // é finalmente buscado.
   const pending = await all(`
-    SELECT DISTINCT (date_utc AT TIME ZONE 'UTC')::date AS day FROM matches
+    SELECT (date_utc AT TIME ZONE 'UTC')::date AS day, date_utc, status, home_team, away_team
+      FROM matches
      WHERE status = 'live'
         OR (status = 'scheduled' AND home_score IS NULL
             AND date_utc <= now() AND date_utc > now() - interval '7 days')
-        -- jogos futuros do mata-mata ainda com placeholder ("2A", "A definir"):
-        -- busca o chaveamento com antecedência para liberar os palpites
-        OR (status = 'scheduled' AND date_utc > now() AND date_utc < now() + interval '8 days'
-            AND (home_team ~ '^[123][A-L]+$' OR home_team = 'A definir'))`);
+        -- jogos futuros do mata-mata: filtrados em JS pelo isPlaceholder, que
+        -- reconhece também os nomes provisórios da ESPN gravados no banco
+        OR (status = 'scheduled' AND date_utc > now() AND date_utc < now() + interval '8 days')`);
   const days = new Set();
   const addDay = (d) => {
     const iso = (d instanceof Date ? d.toISOString() : String(d)).slice(0, 10);
@@ -158,7 +170,11 @@ async function syncFromESPN() {
     days.add(iso.replace(/-/g, ''));
     days.add(new Date(t - 86_400_000).toISOString().slice(0, 10).replace(/-/g, ''));
   };
-  pending.forEach((r) => addDay(r.day));
+  // jogos futuros só interessam enquanto algum lado for placeholder: é a busca
+  // antecipada do chaveamento para liberar os palpites antes do bloqueio
+  pending
+    .filter((r) => r.status === 'live' || new Date(r.date_utc) <= new Date() || isPlaceholder(r))
+    .forEach((r) => addDay(r.day));
   addDay(new Date());
 
   const events = [];
@@ -190,7 +206,7 @@ async function syncFromESPN() {
 
     const state = ev.status?.type?.state; // pre | in | post
     const status = state === 'post' ? 'finished' : state === 'in' ? 'live' : 'scheduled';
-    const isPh = local.home_team === 'A definir' || /^[123][A-L]+$/.test(local.home_team);
+    const isPh = isPlaceholder(local);
     const home = canonicalTeam(hc.team.name), away = canonicalTeam(ac.team.name);
 
     // Jogo ainda não começou: só preenche os times do mata-mata (placeholder
@@ -252,7 +268,7 @@ async function syncFromApiFootball() {
     if (local.status === status && local.home_score === hs &&
         local.away_score === as && local.api_fixture_id === fx.fixture.id) continue;
 
-    const isPh = local.home_team === 'A definir' || /^[123][A-L]+$/.test(local.home_team);
+    const isPh = isPlaceholder(local);
     await run(
       `UPDATE matches SET home_score=$1, away_score=$2, status=$3, api_fixture_id=$4,
          home_team = CASE WHEN $7 THEN $5 ELSE home_team END,

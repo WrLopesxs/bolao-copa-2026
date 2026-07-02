@@ -34,6 +34,12 @@ function prettyTeam(name) {
   // ESPN: "Winner Match 73" / "Runner-Up Match 73"
   if ((m = s.match(/^Winner(?:s)? Match (\d+)$/i))) return `Vencedor do jogo ${m[1]}`;
   if ((m = s.match(/^(?:Runner-?Up|Loser) Match (\d+)$/i))) return `Perdedor do jogo ${m[1]}`;
+  // ESPN: "Round of 32 1 Winner" / "Quarterfinal 2 Winner" / "Semifinal 1 Loser"
+  if ((m = s.match(/^(Round of 32|Round of 16|Quarter-?finals?|Semi-?finals?) (\d+) (Winner|Loser)$/i))) {
+    const FASE = { 'round of 32': '16 avos', 'round of 16': 'oitavas', quarterfinal: 'quartas', semifinal: 'semis' };
+    const fase = FASE[m[1].toLowerCase().replace('-', '').replace(/s$/, '')] || m[1];
+    return `${/winner/i.test(m[3]) ? 'Vencedor' : 'Perdedor'} do jogo ${m[2]} (${fase})`;
+  }
   // nossos códigos: "2J" (posição+grupo) e "3ABCDF" (melhor 3º entre grupos)
   if ((m = s.match(/^([1-4])([A-L])$/))) return `${ORD[m[1]]} do Grupo ${m[2]}`;
   if ((m = s.match(/^([1-4])([A-L]{2,})$/))) return `${ORD[m[1]]} colocado (${m[2].split('').join('/')})`;
