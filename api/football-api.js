@@ -64,20 +64,26 @@ function mapStatus(short) {
 function findLocalMatch(fx, locals) {
   let m = locals.find((x) => x.api_fixture_id === fx.fixture.id);
   if (m) return m;
-  const day = fx.fixture.date.slice(0, 10);
   const h = normalize(fx.teams.home.name), a = normalize(fx.teams.away.name);
-  const sameDay = locals.filter((c) => new Date(c.date_utc).toISOString().slice(0, 10) >= day &&
-                                       new Date(c.date_utc).toISOString().slice(0, 10) <= day);
   const byName = locals.find((c) => {
     const ch = normalize(c.home_team), ca = normalize(c.away_team);
     return (ch === h && ca === a) || (ch === a && ca === h);
   });
   if (byName) return byName;
-  // Mata-mata com placeholder ("2A", "A definir"): vincula pelo horário do jogo
+  // Mata-mata com placeholder ("2A", "A definir"): vincula pelo horário do jogo.
+  // Tolerância de 2h: o horário oficial pode mudar depois da tabela ser montada
+  // (nos 16 avos o jogo 79 saiu 1h depois do previsto e ficava sem vínculo);
+  // como os jogos vizinhos distam 3h30 ou mais, 2h não gera ambiguidade.
   const kickoff = new Date(fx.fixture.date).getTime();
-  const ph = locals.filter((c) => !c.api_fixture_id &&
+  let ph = locals.filter((c) => !c.api_fixture_id &&
     (c.home_team === 'A definir' || /^[123][A-L]+$/.test(c.home_team)) &&
-    Math.abs(new Date(c.date_utc).getTime() - kickoff) < 30 * 60 * 1000);
+    Math.abs(new Date(c.date_utc).getTime() - kickoff) < 2 * 60 * 60 * 1000);
+  // mais de um candidato no horário: desempata pela cidade do estádio
+  if (ph.length > 1 && fx.fixture.venue?.city) {
+    const city = normalize(fx.fixture.venue.city);
+    const byCity = ph.filter((c) => normalize(c.location).includes(city));
+    if (byCity.length) ph = byCity;
+  }
   return ph.length === 1 ? ph[0] : null;
 }
 
@@ -132,14 +138,15 @@ async function syncFromESPN() {
   // um jogo de madrugada UTC fica agrupado no dia ANTERIOR, e jogos de ontem
   // somem da lista — deixando partidas presas em "ao vivo". Por isso buscamos
   // POR DATA (hoje + dias de jogos pendentes), sempre incluindo o dia anterior.
-  // Inclui também jogos agendados que já começaram mas seguem SEM placar (até 3
-  // dias): cobre o caso de a fonte não ter casado o nome na primeira tentativa —
-  // numa sync seguinte (ex.: alias corrigido) o resultado é finalmente buscado.
+  // Inclui também jogos agendados que já começaram mas seguem SEM placar (até 7
+  // dias): cobre o caso de a fonte não ter casado o nome ou o horário na primeira
+  // tentativa — numa sync seguinte (ex.: alias/tolerância corrigidos) o resultado
+  // é finalmente buscado.
   const pending = await all(`
     SELECT DISTINCT (date_utc AT TIME ZONE 'UTC')::date AS day FROM matches
      WHERE status = 'live'
         OR (status = 'scheduled' AND home_score IS NULL
-            AND date_utc <= now() AND date_utc > now() - interval '3 days')
+            AND date_utc <= now() AND date_utc > now() - interval '7 days')
         -- jogos futuros do mata-mata ainda com placeholder ("2A", "A definir"):
         -- busca o chaveamento com antecedência para liberar os palpites
         OR (status = 'scheduled' AND date_utc > now() AND date_utc < now() + interval '8 days'
@@ -176,7 +183,7 @@ async function syncFromESPN() {
     // monta no formato de fixture da API-Football para reusar o matcher
     // (id -1 evita casar com api_fixture_id nulo de outros jogos)
     const local = findLocalMatch({
-      fixture: { id: -1, date: ev.date },
+      fixture: { id: -1, date: ev.date, venue: { city: comp?.venue?.address?.city } },
       teams: { home: { name: hc.team.name }, away: { name: ac.team.name } },
     }, locals);
     if (!local) continue;
@@ -190,7 +197,10 @@ async function syncFromESPN() {
     // "2A" -> "South Africa") para liberar os palpites ANTES do bloqueio.
     if (status === 'scheduled') {
       if (isPh && (local.home_team !== home || local.away_team !== away)) {
-        await run(`UPDATE matches SET home_team=$1, away_team=$2 WHERE id=$3`, [home, away, local.id]);
+        // date_utc recebe o horário real da fonte: se a tabela local previa
+        // outro horário, o bloqueio de palpites e as syncs passam a usar o certo
+        await run(`UPDATE matches SET home_team=$1, away_team=$2, date_utc=$3 WHERE id=$4`,
+          [home, away, new Date(ev.date).toISOString(), local.id]);
         changed = true;
       }
       continue;
@@ -202,9 +212,10 @@ async function syncFromESPN() {
     await run(
       `UPDATE matches SET home_score=$1, away_score=$2, status=$3,
          home_team = CASE WHEN $6 THEN $4 ELSE home_team END,
-         away_team = CASE WHEN $6 THEN $5 ELSE away_team END
+         away_team = CASE WHEN $6 THEN $5 ELSE away_team END,
+         date_utc  = CASE WHEN $6 THEN $8::timestamptz ELSE date_utc END
        WHERE id=$7`,
-      [hs, as, status, home, away, isPh, local.id]);
+      [hs, as, status, home, away, isPh, local.id, new Date(ev.date).toISOString()]);
     changed = true;
     if (status === 'finished' && hs !== null && as !== null) await scoreMatch(local.id);
   }
@@ -245,9 +256,11 @@ async function syncFromApiFootball() {
     await run(
       `UPDATE matches SET home_score=$1, away_score=$2, status=$3, api_fixture_id=$4,
          home_team = CASE WHEN $7 THEN $5 ELSE home_team END,
-         away_team = CASE WHEN $7 THEN $6 ELSE away_team END
+         away_team = CASE WHEN $7 THEN $6 ELSE away_team END,
+         date_utc  = CASE WHEN $7 THEN $9::timestamptz ELSE date_utc END
        WHERE id=$8`,
-      [hs, as, status, fx.fixture.id, fx.teams.home.name, fx.teams.away.name, isPh, local.id]
+      [hs, as, status, fx.fixture.id, fx.teams.home.name, fx.teams.away.name, isPh, local.id,
+       new Date(fx.fixture.date).toISOString()]
     );
     changed = true;
     if (status === 'finished' && hs !== null && as !== null) await scoreMatch(local.id);
