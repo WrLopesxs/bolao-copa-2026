@@ -14,7 +14,6 @@ const { getRanking, POINTS } = require('../backend/scoring');
 const { sendPush } = require('./push');
 const { syncIfStale, scoreUnscored } = require('./football-api');
 const { h, isLocked, publicMatch, rateLimit } = require('./helpers');
-const teams = require('../database/teams.json');
 
 const router = express.Router();
 
@@ -331,25 +330,18 @@ router.get('/groups/:gid/dashboard', requireAuth, requireMember, h(async (req, r
     label: `${x.home_team} x ${x.away_team}`, points: x.points, total: (acc += x.points),
   }));
 
-  // extras premium: campeão da última rodada + resumo dos palpites bônus
-  let round_champion = null, bonus = null;
+  // extra premium: campeão da última rodada
+  let round_champion = null;
   if (premium) {
     round_champion = await get(`
       SELECT rc.day, rc.points, u.id AS user_id, u.name, u.photo
         FROM round_champions rc JOIN users u ON u.id = rc.user_id
        WHERE rc.group_id = $1 ORDER BY rc.day DESC LIMIT 1`, [req.group.id]);
-    const bq = await get(`
-      SELECT COUNT(*)::int AS total, MIN(lock_at) AS lock_at,
-             COUNT(*) FILTER (WHERE a.user_id IS NOT NULL)::int AS answered
-        FROM bonus_questions q
-        LEFT JOIN bonus_answers a ON a.question_id = q.id AND a.user_id = $1
-       WHERE q.competition_id = $2`, [req.user.id, req.group.competition_id]);
-    bonus = bq && bq.total > 0 ? bq : null;
   }
 
   res.json({
     me, top10: ranking.slice(0, 10), upcoming, live, recent, evolution,
-    total_users: ranking.length, premium, round_champion, bonus,
+    total_users: ranking.length, premium, round_champion,
   });
 }));
 
@@ -422,54 +414,6 @@ async function ensureRoundChampions(group) {
     }
   }
 }
-
-// ========================================= PALPITES BÔNUS (premium)
-router.get('/groups/:gid/bonus', requireAuth, requireMember, requirePremium, h(async (req, res) => {
-  const questions = await all(`
-    SELECT q.*, a.answer AS my_answer, a.points AS my_points
-      FROM bonus_questions q
-      LEFT JOIN bonus_answers a ON a.question_id = q.id AND a.user_id = $1
-     WHERE q.competition_id = $2 ORDER BY q.id`, [req.user.id, req.group.competition_id]);
-  const t = (name) => teams[name]?.pt || name;
-  res.json({
-    questions: questions.map((q) => {
-      const lockIso = q.lock_at instanceof Date ? q.lock_at.toISOString() : q.lock_at;
-      const locked = Date.now() >= new Date(lockIso).getTime();
-      return {
-        id: q.id, question: q.question, qtype: q.qtype, points: q.points,
-        options: q.options ? JSON.parse(q.options) : null,
-        lock_at: lockIso, locked,
-        my_answer: q.my_answer, my_answer_pt: q.qtype === 'team' ? t(q.my_answer) : q.my_answer,
-        my_points: q.my_points,
-        // gabarito só aparece depois de travado E corrigido
-        correct_answer: locked && q.correct_answer
-          ? (q.qtype === 'team' ? t(q.correct_answer) : q.correct_answer) : null,
-      };
-    }),
-    teams: Object.entries(teams).map(([en, v]) => ({ en, pt: v.pt })).sort((a, b) => a.pt.localeCompare(b.pt, 'pt')),
-  });
-}));
-
-router.post('/groups/:gid/bonus/:qid', requireAuth, requireMember, requirePremium, h(async (req, res) => {
-  const q = await get('SELECT * FROM bonus_questions WHERE id = $1', [Number(req.params.qid)]);
-  if (!q) return res.status(404).json({ error: 'Pergunta não encontrada.' });
-  const lockIso = q.lock_at instanceof Date ? q.lock_at.toISOString() : q.lock_at;
-  if (Date.now() >= new Date(lockIso).getTime())
-    return res.status(403).json({ error: 'Este palpite bônus já está travado.' });
-
-  let answer = String(req.body?.answer || '').trim();
-  if (q.qtype === 'team' && !teams[answer]) return res.status(400).json({ error: 'Escolha uma seleção válida.' });
-  if (q.qtype === 'choice' && !JSON.parse(q.options || '[]').includes(answer))
-    return res.status(400).json({ error: 'Escolha uma das opções.' });
-  if (q.qtype === 'text' && (answer.length < 2 || answer.length > 60))
-    return res.status(400).json({ error: 'Resposta deve ter entre 2 e 60 caracteres.' });
-
-  await run(`
-    INSERT INTO bonus_answers (question_id, user_id, answer, updated_at) VALUES ($1,$2,$3, now())
-    ON CONFLICT (question_id, user_id) DO UPDATE SET answer = excluded.answer, updated_at = now()`,
-    [q.id, req.user.id, answer]);
-  res.json({ ok: true });
-}));
 
 // =============================================== RAIO-X DO GRUPO (premium)
 router.get('/groups/:gid/stats', requireAuth, requireMember, requirePremium, h(async (req, res) => {

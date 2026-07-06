@@ -11,7 +11,7 @@ const { calcPoints, scoreMatch, rescoreAll, getRanking, POINTS } = require('../b
 const { syncResults, syncIfStale, scoreUnscored } = require('./football-api');
 const { getVapid, saveSubscription, sendPush } = require('./push');
 
-const { h, isLocked, publicMatch, validScore, lc, normTxt, rateLimit } = require('./helpers');
+const { h, isLocked, publicMatch, validScore, lc, rateLimit } = require('./helpers');
 const teams = require('../database/teams.json');
 
 const router = express.Router();
@@ -255,41 +255,6 @@ router.post('/admin/push-test', requireAdmin, h(async (req, res) => {
     await sendPush(id, payload);
   }
   res.json({ ok: true, users: ids.length, devices });
-}));
-
-// -------- palpites bônus: ver respostas e definir o gabarito (pontua na hora)
-router.get('/admin/bonus', requireAdmin, h(async (req, res) => {
-  const questions = await all('SELECT * FROM bonus_questions ORDER BY id');
-  const answers = await all(`
-    SELECT question_id, answer, COUNT(*)::int AS n
-      FROM bonus_answers GROUP BY question_id, answer ORDER BY n DESC, answer`);
-  res.json({
-    questions: questions.map((q) => ({
-      ...q, lock_at: q.lock_at instanceof Date ? q.lock_at.toISOString() : q.lock_at,
-      options: q.options ? JSON.parse(q.options) : null,
-    })),
-    answers,
-    teams: Object.entries(teams).map(([en, v]) => ({ en, pt: v.pt })).sort((a, b) => a.pt.localeCompare(b.pt, 'pt')),
-  });
-}));
-
-router.put('/admin/bonus/:id', requireAdmin, h(async (req, res) => {
-  const q = await get('SELECT * FROM bonus_questions WHERE id = $1', [Number(req.params.id)]);
-  if (!q) return res.status(404).json({ error: 'Pergunta não encontrada.' });
-  const ans = String(req.body?.correct_answer || '').trim();
-  await run('UPDATE bonus_questions SET correct_answer = $1 WHERE id = $2', [ans || null, q.id]);
-  if (!ans) { // gabarito removido: despontua
-    await run('UPDATE bonus_answers SET points = NULL WHERE question_id = $1', [q.id]);
-    return res.json({ ok: true, scored: 0 });
-  }
-  // team/choice: igualdade exata; texto: comparação sem acento/caixa
-  const rows = await all('SELECT user_id, answer FROM bonus_answers WHERE question_id = $1', [q.id]);
-  for (const r of rows) {
-    const hit = q.qtype === 'text' ? normTxt(r.answer) === normTxt(ans) : r.answer === ans;
-    await run('UPDATE bonus_answers SET points = $1 WHERE question_id = $2 AND user_id = $3',
-      [hit ? q.points : 0, q.id, r.user_id]);
-  }
-  res.json({ ok: true, scored: rows.length });
 }));
 
 router.post('/admin/sync', requireAdmin, h(async (req, res) => {

@@ -89,8 +89,7 @@ const VALID_STAGES = ['grupos', 'r32', 'oitavas', 'quartas', 'semis', 'final'];
  * Ranking geral ou por fase.
  * - group (linha de groups): considera só os membros do grupo — o palpite é
  *   único por usuário; o que muda entre grupos é quem concorre.
- * - Grupo premium: soma os pontos dos palpites bônus (no ranking geral) e,
- *   se o grupo tiver pontuação personalizada, recalcula os pontos dos jogos
+ * - Grupo premium com pontuação personalizada: recalcula os pontos dos jogos
  *   na hora com a regra do grupo (a regra padrão fica nos pontos gravados).
  */
 async function getRanking(stage = null, group = null) {
@@ -98,7 +97,6 @@ async function getRanking(stage = null, group = null) {
   const premium = group?.plan === 'premium';
   const custom = premium &&
     (group.points_exact != null || group.points_outcome != null || group.points_goals != null);
-  const withBonus = premium && !stage;
 
   const params = [];
   const p = (v) => { params.push(v); return '$' + params.length; };
@@ -128,21 +126,16 @@ async function getRanking(stage = null, group = null) {
   }
 
   const memberJoin = group ? `JOIN group_members gm ON gm.user_id = u.id AND gm.group_id = ${p(group.id)}` : '';
-  const bonusJoin = withBonus
-    ? `LEFT JOIN (SELECT user_id, SUM(points)::int AS bpts FROM bonus_answers WHERE points IS NOT NULL GROUP BY user_id) bn ON bn.user_id = u.id`
-    : '';
 
   const rows = await all(`
     SELECT u.id, u.name, u.photo, u.sector,
            ${group ? 'MAX(gm.title) AS title,' : ''}
-           COALESCE(SUM(p.points),0)::int ${withBonus ? '+ COALESCE(MAX(bn.bpts),0)' : ''} AS total_points,
-           ${withBonus ? 'COALESCE(MAX(bn.bpts),0)::int' : '0'}                AS bonus_points,
+           COALESCE(SUM(p.points),0)::int                                      AS total_points,
            COALESCE(SUM(CASE WHEN p.is_exact THEN 1 END),0)::int               AS exact_hits,
            COUNT(p.id)::int                                                    AS total_predictions,
            COALESCE(SUM(CASE WHEN p.points > 0 THEN 1 END),0)::int             AS scoring_hits
     FROM users u
     ${memberJoin}
-    ${bonusJoin}
     LEFT JOIN (${predSql}) p ON p.user_id = u.id
     GROUP BY u.id
     ORDER BY total_points DESC, exact_hits DESC, scoring_hits DESC, u.name ASC

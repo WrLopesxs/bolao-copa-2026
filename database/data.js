@@ -169,29 +169,6 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- palpites bônus (campeão, artilheiro etc.) — perguntas da plataforma;
--- a resposta é global por usuário, mas os pontos só contam em grupo premium
-CREATE TABLE IF NOT EXISTS bonus_questions (
-  id             SERIAL PRIMARY KEY,
-  competition_id INTEGER NOT NULL DEFAULT 1,
-  qkey           TEXT UNIQUE NOT NULL,
-  question       TEXT NOT NULL,
-  qtype          TEXT NOT NULL,          -- team | choice | text
-  options        TEXT DEFAULT '',        -- JSON (para qtype choice)
-  points         INTEGER NOT NULL,
-  lock_at        TIMESTAMPTZ NOT NULL,
-  correct_answer TEXT
-);
-
-CREATE TABLE IF NOT EXISTS bonus_answers (
-  question_id INTEGER NOT NULL REFERENCES bonus_questions(id) ON DELETE CASCADE,
-  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  answer      TEXT NOT NULL,
-  points      INTEGER,
-  updated_at  TIMESTAMPTZ DEFAULT now(),
-  PRIMARY KEY (question_id, user_id)
-);
-
 -- campeão da rodada (grupos premium): um vencedor por dia de jogos
 CREATE TABLE IF NOT EXISTS round_champions (
   group_id  INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
@@ -275,26 +252,6 @@ async function migrateToGroups() {
   await run(`SELECT setval('groups_id_seq', GREATEST((SELECT COALESCE(MAX(id),0) FROM groups), 1),
                     EXISTS(SELECT 1 FROM groups))`);
   await run(`UPDATE chat_messages SET group_id = 1 WHERE group_id IS NULL`);
-  await seedBonusQuestions();
-}
-
-/** Perguntas bônus da Copa 2026 (travam antes do mata-mata começar). */
-async function seedBonusQuestions() {
-  const LOCK = '2026-06-28T00:00:00Z'; // véspera do mata-mata
-  const QUESTIONS = [
-    ['campeao',    'Quem será o campeão da Copa?',    'team',   '', 25],
-    ['vice',       'Quem será o vice-campeão?',       'team',   '', 15],
-    ['artilheiro', 'Quem será o artilheiro da Copa?', 'text',   '', 20],
-    ['brasil',     'Até onde o Brasil vai?',          'choice',
-      JSON.stringify(['Fase de Grupos', '16 avos', 'Oitavas', 'Quartas', 'Semifinal', 'Vice', 'Campeão']), 15],
-  ];
-  for (const [qkey, question, qtype, options, points] of QUESTIONS) {
-    await run(
-      `INSERT INTO bonus_questions (competition_id, qkey, question, qtype, options, points, lock_at)
-       VALUES (1, $1, $2, $3, $4, $5, $6) ON CONFLICT (qkey) DO NOTHING`,
-      [qkey, question, qtype, options, points, LOCK]
-    );
-  }
 }
 
 // Garante schema + jogos carregados. Memoizado (roda uma vez por processo).

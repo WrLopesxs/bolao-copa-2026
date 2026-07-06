@@ -541,26 +541,18 @@ async function viewDashboard() {
       <div class="stat"><div class="num">${me.exact_hits}</div><div class="lbl">Placares exatos</div></div>
     </div>
 
-    ${d.premium && (d.round_champion || d.bonus) ? `
+    ${d.premium && d.round_champion ? `
     <div class="grid cols-2" style="margin-bottom:14px">
-      ${d.round_champion ? `
       <div class="card">
         <h3>🏆 Campeão da rodada · ${fmtDay(d.round_champion.day)}</h3>
         <div class="online-item">${avatar(d.round_champion)}
           <div><b>${esc(d.round_champion.name)}</b><span class="sec"> · ${d.round_champion.points} pts no dia</span></div>
         </div>
-      </div>` : ''}
-      ${d.bonus ? `
-      <div class="card">
-        <h3>🎯 Palpites Bônus</h3>
-        <p class="muted" style="margin-bottom:10px">Campeão, artilheiro e mais, valendo pontos extras.
-          Você respondeu <b>${d.bonus.answered}/${d.bonus.total}</b>${Date.now() < new Date(d.bonus.lock_at).getTime() ? ` · trava em ${fmtDate(d.bonus.lock_at)}` : ' · travado'}.</p>
-        <a class="btn ghost" href="#/bonus">${d.bonus.answered < d.bonus.total ? 'Responder agora' : 'Ver meus palpites bônus'}</a>
-      </div>` : ''}
+      </div>
     </div>` : ''}
     ${!d.premium ? `
     <div class="card premium-card" style="margin-bottom:14px">
-      <p class="muted" style="font-size:.84rem">🎯 Palpites Bônus, 📊 Raio-X, 🏆 Campeão da Rodada e mais —
+      <p class="muted" style="font-size:.84rem">📊 Raio-X, 🏆 Campeão da Rodada e mais —
         <a href="#/grupo" style="color:var(--accent);font-weight:700">conheça o premium ⭐</a></p>
     </div>` : ''}
 
@@ -918,7 +910,7 @@ async function viewRanking() {
           <tr class="${r.id === state.user.id ? 'me' : ''}">
             <td class="pos">${medal(r.position)}</td>
             <td><div class="user-cell">${avatar(r)}<div>${esc(r.name)}${r.title ? ` <span class="tag gold">${esc(r.title)}</span>` : ''}<span class="sec">${esc(r.sector || '')}</span></div></div></td>
-            <td><b>${r.total_points}</b>${r.bonus_points > 0 ? ` <span class="sec" title="pontos dos palpites bônus">🎯+${r.bonus_points}</span>` : ''}</td>
+            <td><b>${r.total_points}</b></td>
             <td>${r.exact_hits}</td>
             <td>${r.total_predictions}</td>
           </tr>`).join('')}
@@ -1005,35 +997,8 @@ async function viewPerfil() {
 async function viewAdmin(tab = 'jogos') {
   if (!state.user?.is_admin) { location.hash = '#/dashboard'; return; }
 
-  const tabs = [['jogos', 'Jogos'], ['usuarios', 'Usuários'], ['bonus', 'Bônus 🎯'], ['config', 'Configurações']];
+  const tabs = [['jogos', 'Jogos'], ['usuarios', 'Usuários'], ['config', 'Configurações']];
   let inner = '';
-
-  if (tab === 'bonus') {
-    const d = await api('/admin/bonus');
-    const answersFor = (qid) => d.answers.filter((a) => a.question_id === qid);
-    const tPt = (en) => d.teams.find((t) => t.en === en)?.pt || en;
-    inner = d.questions.map((q) => {
-      const ans = answersFor(q.id);
-      const total = ans.reduce((s, a) => s + a.n, 0);
-      const field = q.qtype === 'team'
-        ? `<select name="correct_answer"><option value="">— sem gabarito —</option>
-             ${d.teams.map((t) => `<option value="${esc(t.en)}" ${q.correct_answer === t.en ? 'selected' : ''}>${esc(t.pt)}</option>`).join('')}</select>`
-        : q.qtype === 'choice'
-          ? `<select name="correct_answer"><option value="">— sem gabarito —</option>
-               ${q.options.map((o) => `<option value="${esc(o)}" ${q.correct_answer === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
-          : `<input name="correct_answer" maxlength="60" value="${esc(q.correct_answer || '')}" placeholder="Ex.: Haaland">`;
-      return `
-      <div class="card" style="margin-bottom:14px">
-        <h3>${esc(q.question)} <span class="badge pts">+${q.points} pts</span></h3>
-        <p class="muted" style="margin-bottom:8px">Trava em ${fmtDate(q.lock_at)} · <b>${total}</b> resposta(s)
-          ${ans.length ? '· mais votadas: ' + ans.slice(0, 4).map((a) => `<b>${esc(q.qtype === 'team' ? tPt(a.answer) : a.answer)}</b> (${a.n})`).join(', ') : ''}</p>
-        <form data-bq="${q.id}" class="inline-form">
-          <div class="field"><label>Resposta certa</label>${field}</div>
-          <button class="btn small" type="submit">Salvar gabarito</button>
-        </form>
-      </div>`;
-    }).join('');
-  }
 
   if (tab === 'usuarios') {
     const { users } = await api('/admin/users');
@@ -1206,17 +1171,6 @@ async function viewAdmin(tab = 'jogos') {
     if (!uid) return toast('Selecione um participante.', 'err');
     renderFixList(uid);
   });
-
-  // --- ações da aba bônus (gabarito)
-  app.querySelectorAll('[data-bq]').forEach((f) => f.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      const d = await api('/admin/bonus/' + f.dataset.bq, {
-        method: 'PUT', body: { correct_answer: new FormData(f).get('correct_answer') },
-      });
-      toast(`Gabarito salvo! ${d.scored} resposta(s) pontuada(s).`);
-    } catch (err) { toast(esc(err.message), 'err'); }
-  }));
 
   // --- ações da aba jogos
   app.querySelectorAll('[data-edit]').forEach(tr =>
@@ -1563,7 +1517,7 @@ async function viewGrupo() {
           <h3>⭐ Vire premium</h3>
           <p class="muted" style="margin-bottom:10px">
             <b>Participantes ilimitados</b> (hoje: ${group.member_count}/${group.max_members || 10}) ·
-            🎯 <b>Palpites Bônus</b> (campeão, artilheiro…) · 📊 <b>Raio-X</b> com corrida pelo título e prêmios ·
+            📊 <b>Raio-X</b> com corrida pelo título e prêmios ·
             🏆 <b>Campeão da Rodada</b> com push automático · 🏷️ títulos de zoeira ·
             🕐 auditoria anti-mamata · pontuação personalizada · logo própria · exportação Excel.
           </p>
@@ -1764,59 +1718,6 @@ function premiumUpsellView(featureName) {
     </div>`;
 }
 
-// ---------- PALPITES BÔNUS (premium) ----------
-async function viewBonus() {
-  let d;
-  try { d = await gapi('/bonus'); }
-  catch (err) { premiumUpsellView('🎯 Palpites Bônus'); return; }
-
-  const teamSelect = (q) => `
-    <select data-ans="${q.id}">
-      <option value="">Escolha a seleção…</option>
-      ${d.teams.map((t) => `<option value="${esc(t.en)}" ${q.my_answer === t.en ? 'selected' : ''}>${esc(t.pt)}</option>`).join('')}
-    </select>`;
-  const choiceSelect = (q) => `
-    <select data-ans="${q.id}">
-      <option value="">Escolha…</option>
-      ${q.options.map((o) => `<option value="${esc(o)}" ${q.my_answer === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
-    </select>`;
-  const textInput = (q) => `<input data-ans="${q.id}" maxlength="60" placeholder="Ex.: Haaland" value="${esc(q.my_answer || '')}">`;
-
-  app.innerHTML = `
-    <h2 class="page-title">🎯 Palpites Bônus</h2>
-    <p class="page-sub">Pontos extras que entram no ranking do grupo · respostas valem em todos os seus grupos premium</p>
-    <div class="match-list" style="max-width:560px">
-      ${d.questions.map((q) => `
-      <div class="card">
-        <div class="match-meta">
-          <span><b style="color:var(--text);font-size:.95rem">${esc(q.question)}</b></span>
-          <span class="badge pts">+${q.points} pts</span>
-        </div>
-        ${q.locked ? `
-          <p style="margin-top:8px">Sua resposta: <b>${esc(q.my_answer_pt || '— não respondeu')}</b>
-            ${q.my_points != null ? `<span class="badge ${q.my_points > 0 ? 'pts' : 'fin'}">${q.my_points > 0 ? '✅ +' + q.my_points : '0'} pts</span>` : ''}
-          </p>
-          ${q.correct_answer ? `<p class="muted">Resposta certa: <b>${esc(q.correct_answer)}</b></p>`
-            : '<p class="muted">🔒 Travado — aguardando o resultado.</p>'}` : `
-          <div class="inline-form" style="margin-top:10px">
-            <div class="field">${q.qtype === 'team' ? teamSelect(q) : q.qtype === 'choice' ? choiceSelect(q) : textInput(q)}</div>
-            <button class="btn small" data-bsave="${q.id}">Salvar</button>
-          </div>
-          <p class="muted" style="font-size:.72rem;margin-top:6px">Trava em ${fmtDate(q.lock_at)}</p>`}
-      </div>`).join('')}
-    </div>`;
-
-  app.querySelectorAll('[data-bsave]').forEach((b) => b.addEventListener('click', async () => {
-    const qid = b.dataset.bsave;
-    const answer = app.querySelector(`[data-ans="${qid}"]`).value.trim();
-    if (!answer) return toast('Escolha ou escreva sua resposta.', 'err');
-    b.disabled = true;
-    try { await gapi(`/bonus/${qid}`, { method: 'POST', body: { answer } }); toast('Palpite bônus salvo! 🎯'); }
-    catch (err) { toast(esc(err.message), 'err'); }
-    b.disabled = false;
-  }));
-}
-
 // ---------- RAIO-X DO GRUPO (premium) ----------
 async function viewRaio() {
   let d;
@@ -1931,7 +1832,6 @@ const routes = {
   novogrupo: viewNovoGrupo,
   entrar: viewEntrar,
   grupo: viewGrupo,
-  bonus: viewBonus,
   raio: viewRaio,
   dashboard: viewDashboard,
   jogos: () => viewJogos(true), // ao abrir a aba, rola até o próximo a palpitar
@@ -1942,7 +1842,7 @@ const routes = {
 };
 
 // Telas que só fazem sentido dentro de um grupo ativo
-const NEEDS_GROUP = ['dashboard', 'jogos', 'ranking', 'chat', 'grupo', 'bonus', 'raio'];
+const NEEDS_GROUP = ['dashboard', 'jogos', 'ranking', 'chat', 'grupo', 'raio'];
 
 async function route() {
   const segs = (location.hash.replace('#/', '') || 'dashboard').split('/');
